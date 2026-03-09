@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
 name: cow-programmatic-orders
-description: CoW Protocol Programmatic Orders Indexer — Composable CoW order tracking across all supported chains
+description: CoW Protocol Programmatic Orders Indexer — Composable CoW, COWShed ownership, and GPv2 trade tracking
 
 contracts:
   - name: ComposableCoW
@@ -10,38 +10,71 @@ contracts:
       - event: ConditionalOrderCreated
       - event: MerkleRootSet
 
+  - name: COWShedFactory
+    abi_file_path: abis/COWShedFactory.json
+    handler: src/handlers/COWShedFactory.ts
+    events:
+      - event: COWShedBuilt
+
+  - name: GPv2Settlement
+    abi_file_path: abis/GPv2Settlement.json
+    handler: src/handlers/GPv2Settlement.ts
+    events:
+      - event: Trade
+
 chains:
   - id: 1 # Ethereum Mainnet
     start_block: 17883049
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+      - name: COWShedFactory
+        address: "0x312f92fe5f1710408b20d52a374fa29e099cfa86"
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
   - id: 100 # Gnosis Chain
     start_block: 29380000
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+      - name: COWShedFactory
+        address: "0x4f4350bf2c74aacd508d598a1ba94ef84378793d" # Different on Gnosis!
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
   - id: 42161 # Arbitrum One
     start_block: 130000000
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+      - name: COWShedFactory
+        address: "0x312f92fe5f1710408b20d52a374fa29e099cfa86"
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
   - id: 8453 # Base
     start_block: 7000000
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+      - name: COWShedFactory
+        address: "0x312f92fe5f1710408b20d52a374fa29e099cfa86"
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
   - id: 11155111 # Sepolia (testnet)
     start_block: 4500000
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+      - name: COWShedFactory
+        address: "0x312f92fe5f1710408b20d52a374fa29e099cfa86"
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
 field_selection:
   transaction_fields:
     - hash
     - from
+    - input # Needed for ERC-1271 signature decoding from settle() calldata

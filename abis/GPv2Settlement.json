@@ -1,0 +1,16 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "owner", "type": "address" },
+      { "indexed": false, "name": "sellToken", "type": "address" },
+      { "indexed": false, "name": "buyToken", "type": "address" },
+      { "indexed": false, "name": "sellAmount", "type": "uint256" },
+      { "indexed": false, "name": "buyAmount", "type": "uint256" },
+      { "indexed": false, "name": "feeAmount", "type": "uint256" },
+      { "indexed": false, "name": "orderUid", "type": "bytes" }
+    ],
+    "name": "Trade",
+    "type": "event"
+  }
+]

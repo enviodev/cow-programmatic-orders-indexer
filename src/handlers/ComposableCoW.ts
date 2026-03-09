@@ -39,7 +39,6 @@ ComposableCoW.ConditionalOrderCreated.handler(async ({ event, context }) => {
     try {
       const decoded = decodeStaticInput(orderType, staticInput as Hex);
       if (decoded) {
-        // Convert bigints to strings for JSON serialization
         decodedParams = JSON.parse(
           JSON.stringify(decoded, (_key, value) =>
             typeof value === "bigint" ? value.toString() : value,
@@ -52,6 +51,13 @@ ComposableCoW.ConditionalOrderCreated.handler(async ({ event, context }) => {
         `Decode failed for order ${orderId} type=${orderType}: ${err}`,
       );
     }
+  }
+
+  // M2: Resolve COWShed proxy owner if available
+  let realOwner: string | undefined = undefined;
+  const proxy = await context.COWShedProxy.get(`${owner}-${chainId}`);
+  if (proxy) {
+    realOwner = proxy.eoaOwner;
   }
 
   context.ConditionalOrder.set({
@@ -70,6 +76,7 @@ ComposableCoW.ConditionalOrderCreated.handler(async ({ event, context }) => {
     createdBy: event.transaction.from?.toLowerCase() ?? "",
     decodedParams,
     decodeError,
+    realOwner,
   });
 });
 

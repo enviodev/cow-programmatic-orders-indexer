@@ -12,6 +12,8 @@ enum OrderStatus {
   Cancelled
 }
 
+# ─── M1: Composable CoW Orders ──────────────────────────────────────────────
+
 type ConditionalOrder {
   id: ID! # keccak256(abi.encode(params)) + "-" + chainId
   chainId: Int!
@@ -26,9 +28,12 @@ type ConditionalOrder {
   blockTimestamp: BigInt!
   transactionHash: String!
   createdBy: String! # transaction.from
-  # Decoded params stored as JSON
   decodedParams: Json
   decodeError: String
+  # M2: Resolved EOA owner (if owner is a proxy)
+  realOwner: String @index
+  # M3: Trades linked to this conditional order
+  trades: [Trade!]! @derivedFrom(field: "conditionalOrder")
 }
 
 type MerkleRoot {
@@ -41,4 +46,52 @@ type MerkleRoot {
   blockNumber: Int!
   blockTimestamp: BigInt!
   transactionHash: String!
+}
+
+# ─── M2: COWShed Proxy Ownership ────────────────────────────────────────────
+
+type COWShedProxy {
+  id: ID! # proxy address + "-" + chainId
+  proxyAddress: String! @index
+  eoaOwner: String! @index
+  chainId: Int!
+  blockNumber: Int!
+  transactionHash: String!
+}
+
+# ─── M3: GPv2Settlement Trades ──────────────────────────────────────────────
+
+type Trade {
+  id: ID! # txHash + "-" + logIndex
+  chainId: Int!
+  owner: String! @index
+  sellToken: String!
+  buyToken: String!
+  sellAmount: BigInt!
+  buyAmount: BigInt!
+  feeAmount: BigInt!
+  orderUid: String! @index
+  blockNumber: Int!
+  blockTimestamp: BigInt!
+  transactionHash: String! @index
+  # Linked conditional order (from ERC-1271 sig decode)
+  conditionalOrder: ConditionalOrder
+  # Resolved EOA owner (if owner is a COWShed proxy)
+  realOwner: String
+}
+
+type OrderBookOrder {
+  id: ID! # orderUid
+  orderUid: String! @index
+  owner: String! @index
+  status: String! # open | fulfilled | cancelled | expired
+  sellToken: String!
+  buyToken: String!
+  sellAmount: BigInt!
+  buyAmount: BigInt!
+  validTo: Int!
+  chainId: Int!
+  fetchedAt: BigInt!
+  # Linked conditional order generator
+  conditionalOrder: ConditionalOrder
 }
