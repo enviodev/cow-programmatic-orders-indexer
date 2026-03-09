@@ -2,6 +2,7 @@ import { ComposableCoW } from "generated";
 import { encodeAbiParameters, keccak256, type Hex } from "viem";
 import { getOrderTypeFromHandler } from "../utils/order-types.js";
 import { decodeStaticInput } from "../decoders/index.js";
+import { conditionalOrderOwners } from "../utils/owner-cache.js";
 
 // ─── ConditionalOrderCreated ────────────────────────────────────────────────
 
@@ -78,6 +79,9 @@ ComposableCoW.ConditionalOrderCreated.handler(async ({ event, context }) => {
     decodeError,
     realOwner,
   });
+
+  // Cache this owner so Trade handler can skip DB lookups for non-programmatic trades
+  conditionalOrderOwners.set(`${owner}-${chainId}`, orderId);
 });
 
 // ─── MerkleRootSet ──────────────────────────────────────────────────────────

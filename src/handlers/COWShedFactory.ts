@@ -1,4 +1,5 @@
 import { COWShedFactory } from "generated";
+import { cowShedProxies } from "../utils/owner-cache.js";
 
 // ─── COWShedBuilt ───────────────────────────────────────────────────────────
 // Emitted when a COWShed proxy is deployed for an EOA.
@@ -17,6 +18,9 @@ COWShedFactory.COWShedBuilt.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     transactionHash: event.transaction.hash,
   });
+
+  // Cache so Trade handler can skip DB lookups for non-proxy owners
+  cowShedProxies.set(`${proxyAddress}-${chainId}`, eoaOwner);
 
   // Retroactively update any ConditionalOrders owned by this proxy
   // that were indexed before the proxy deployment was seen.

@@ -1,8 +1,8 @@
 import { GPv2Settlement } from "generated";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
+import { conditionalOrderOwners, cowShedProxies } from "../utils/owner-cache.js";
 
 // Track owners we've already fetched OrderBook orders for in this session
-// to avoid re-creating the same OrderBookOrder entities repeatedly.
 const fetchedOwners = new Set<string>();
 
 GPv2Settlement.Trade.handler(async ({ event, context }) => {
@@ -10,34 +10,23 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
   const chainId = event.chainId;
   const txHash = event.transaction.hash;
   const tradeId = `${txHash}-${event.logIndex}`;
+  const ownerKey = `${owner}-${chainId}`;
 
-  // ─── Link to ConditionalOrder by owner lookup ──────────────────────
-  // Instead of decoding settle() calldata (which requires fetching the
-  // full transaction.input — often 5-20KB per tx), we match by owner.
-  // If this owner has a ConditionalOrder, link the trade to it.
+  // ─── Link to ConditionalOrder (cache-gated) ─────────────────────
+  // Only query DB if this owner was seen in a ConditionalOrderCreated event.
+  // This skips the expensive getWhere for 99%+ of trades.
   let conditionalOrder_id: string | undefined = undefined;
 
-  const ownerOrders = await context.ConditionalOrder.getWhere({
-    owner: { _eq: owner },
-  });
-
-  if (ownerOrders.length > 0) {
-    // Link to the most recent active order for this owner on this chain
-    const chainOrders = ownerOrders
-      .filter((o) => o.chainId === chainId)
-      .sort((a, b) => b.blockNumber - a.blockNumber);
-
-    const activeOrder = chainOrders.find((o) => o.status === "Active") ?? chainOrders[0];
-    if (activeOrder) {
-      conditionalOrder_id = activeOrder.id;
-    }
+  if (conditionalOrderOwners.has(ownerKey)) {
+    conditionalOrder_id = conditionalOrderOwners.get(ownerKey);
   }
 
-  // ─── Resolve COWShed proxy owner ──────────────────────────────────
+  // ─── Resolve COWShed proxy owner (cache-gated) ─────────────────
+  // Only lookup if this address was seen in a COWShedBuilt event.
   let realOwner: string | undefined = undefined;
-  const proxy = await context.COWShedProxy.get(`${owner}-${chainId}`);
-  if (proxy) {
-    realOwner = proxy.eoaOwner;
+
+  if (cowShedProxies.has(ownerKey)) {
+    realOwner = cowShedProxies.get(ownerKey);
   }
 
   // ─── Create Trade entity ──────────────────────────────────────────
@@ -59,44 +48,39 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
   });
 
   // ─── OrderBook API Integration ────────────────────────────────────
-  // Fetch this owner's orders from the CoW API (cached across re-indexes).
-  // Only fetch once per owner per session to avoid redundant processing.
-  if (conditionalOrder_id) {
-    const ownerKey = `${owner}-${chainId}`;
-    if (!fetchedOwners.has(ownerKey)) {
-      fetchedOwners.add(ownerKey);
-      try {
-        const orderBookJson = await context.effect(fetchOrderBookOrders, {
-          owner,
-          chainId,
-        });
+  if (conditionalOrder_id && !fetchedOwners.has(ownerKey)) {
+    fetchedOwners.add(ownerKey);
+    try {
+      const orderBookJson = await context.effect(fetchOrderBookOrders, {
+        owner,
+        chainId,
+      });
 
-        const orderBookOrders = JSON.parse(orderBookJson) as Array<Record<string, unknown>>;
-        if (Array.isArray(orderBookOrders)) {
-          for (const apiOrder of orderBookOrders) {
-            if (!apiOrder.uid) continue;
+      const orderBookOrders = JSON.parse(orderBookJson) as Array<Record<string, unknown>>;
+      if (Array.isArray(orderBookOrders)) {
+        for (const apiOrder of orderBookOrders) {
+          if (!apiOrder.uid) continue;
 
-            context.OrderBookOrder.set({
-              id: apiOrder.uid as string,
-              orderUid: apiOrder.uid as string,
-              owner: ((apiOrder.owner as string) ?? owner).toLowerCase(),
-              status: (apiOrder.status as string) ?? "unknown",
-              sellToken: ((apiOrder.sellToken as string) ?? "").toLowerCase(),
-              buyToken: ((apiOrder.buyToken as string) ?? "").toLowerCase(),
-              sellAmount: BigInt((apiOrder.sellAmount as string) ?? "0"),
-              buyAmount: BigInt((apiOrder.buyAmount as string) ?? "0"),
-              validTo: Number(apiOrder.validTo ?? 0),
-              chainId,
-              fetchedAt: BigInt(event.block.timestamp),
-              conditionalOrder_id: conditionalOrder_id,
-            });
-          }
+          context.OrderBookOrder.set({
+            id: apiOrder.uid as string,
+            orderUid: apiOrder.uid as string,
+            owner: ((apiOrder.owner as string) ?? owner).toLowerCase(),
+            status: (apiOrder.status as string) ?? "unknown",
+            sellToken: ((apiOrder.sellToken as string) ?? "").toLowerCase(),
+            buyToken: ((apiOrder.buyToken as string) ?? "").toLowerCase(),
+            sellAmount: BigInt((apiOrder.sellAmount as string) ?? "0"),
+            buyAmount: BigInt((apiOrder.buyAmount as string) ?? "0"),
+            validTo: Number(apiOrder.validTo ?? 0),
+            chainId,
+            fetchedAt: BigInt(event.block.timestamp),
+            conditionalOrder_id: conditionalOrder_id,
+          });
         }
-      } catch (err) {
-        context.log.warn(
-          `OrderBook API fetch failed for owner=${owner} chain=${chainId}: ${err}`,
-        );
       }
+    } catch (err) {
+      context.log.warn(
+        `OrderBook API fetch failed for owner=${owner} chain=${chainId}: ${err}`,
+      );
     }
   }
 });
