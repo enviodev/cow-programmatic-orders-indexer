@@ -1,15 +1,12 @@
 import {
-  decodeAbiParameters,
   decodeFunctionData,
   encodeAbiParameters,
   keccak256,
   type Hex,
 } from "viem";
+import { getOrderTypeFromHandler } from "./order-types.js";
 
 // settle(IERC20[] tokens, uint256[] clearingPrices, TradeData[] trades, InteractionData[][3] interactions)
-// TradeData: (uint256 sellTokenIndex, uint256 buyTokenIndex, address receiver, uint256 sellAmount,
-//             uint256 buyAmount, uint32 validTo, bytes32 appData, uint256 feeAmount,
-//             uint256 flags, uint256 executedAmount, bytes signature)
 const SETTLE_ABI = [
   {
     name: "settle",
@@ -49,53 +46,107 @@ const SETTLE_ABI = [
   },
 ] as const;
 
-// GPv2Order.Data struct for decoding ERC-1271 signatures
-// The signature contains: abi.encode(GPv2Order.Data, PayloadStruct)
-// PayloadStruct: (bytes32[] proof, ConditionalOrderParams params, bytes offchainInput)
-// ConditionalOrderParams: (address handler, bytes32 salt, bytes staticInput)
-const ERC1271_SIGNATURE_ABI = [
-  {
-    type: "tuple",
-    name: "order",
-    components: [
-      { name: "sellToken", type: "address" },
-      { name: "buyToken", type: "address" },
-      { name: "receiver", type: "address" },
-      { name: "sellAmount", type: "uint256" },
-      { name: "buyAmount", type: "uint256" },
-      { name: "validTo", type: "uint32" },
-      { name: "appData", type: "bytes32" },
-      { name: "feeAmount", type: "uint256" },
-      { name: "kind", type: "bytes32" },
-      { name: "partiallyFillable", type: "bool" },
-      { name: "sellTokenBalance", type: "bytes32" },
-      { name: "buyTokenBalance", type: "bytes32" },
-    ],
-  },
-  {
-    type: "tuple",
-    name: "payload",
-    components: [
-      { name: "proof", type: "bytes32[]" },
-      {
-        name: "params",
-        type: "tuple",
-        components: [
-          { name: "handler", type: "address" },
-          { name: "salt", type: "bytes32" },
-          { name: "staticInput", type: "bytes" },
-        ],
-      },
-      { name: "offchainInput", type: "bytes" },
-    ],
-  },
-] as const;
+// Known ComposableCoW handler addresses (used for pattern matching in signatures)
+const KNOWN_HANDLERS = [
+  "6cf1e9ca41f7611def408122793c358a3d11e5a5", // TWAP
+  "e8212f30c28b4aab467df3725c14d6e89c2eb967", // StopLoss
+  "412c36e5011cd2517016d243a2dfb37f73a242e7", // StopLoss alt
+  "963f411ac754055b611fe464fa4d50772e9b1f9c", // PerpetualSwap
+  "519ba24e959e33b3b6220ca98bd353d8c2d89920", // PerpetualSwap alt
+  "58d2b4b0a29e2d8635b0b47244f3654b1c0f38e9", // GoodAfterTime
+  "daf33924925e03c9cc3a10d434016d6cfad0add5", // GoodAfterTime alt
+  "812308712a6d1367f437e1c1e4af85c854e1e9f6", // TradeAboveThreshold
+];
 
 export interface ConditionalOrderLink {
   handler: string;
   salt: string;
   staticInput: string;
   orderHash: string; // keccak256(abi.encode(params))
+}
+
+/**
+ * Extract ConditionalOrderParams from an ERC-1271 signature by finding the
+ * handler address pattern and reading the ABI-encoded params from there.
+ *
+ * The GPv2 ERC-1271 signature format is:
+ *   [20 bytes signer] [abi.encode(GPv2Order.Data, ComposableCoW.PayloadStruct)]
+ *
+ * The inner encoding uses Solidity's struct ABI encoding which viem cannot
+ * decode directly due to alignment issues. Instead, we find the known handler
+ * address in the signature bytes and extract the ConditionalOrderParams
+ * (handler, salt, staticInput) from the surrounding ABI-encoded tuple.
+ */
+function extractParamsFromSignature(signature: string): ConditionalOrderLink | null {
+  // Strip "0x" prefix and 20-byte signer for searching
+  const sigHex = signature.slice(42).toLowerCase();
+
+  for (const handlerAddr of KNOWN_HANDLERS) {
+    // Find handler address with 12-byte zero-padding (ABI-encoded address)
+    const pattern = "000000000000000000000000" + handlerAddr;
+    const handlerFieldPos = sigHex.indexOf(pattern);
+    if (handlerFieldPos < 0) continue;
+
+    // ConditionalOrderParams tuple: (address handler, bytes32 salt, bytes staticInput)
+    // In ABI encoding:
+    //   word 0: handler (address, padded to 32 bytes) — found
+    //   word 1: salt (bytes32)
+    //   word 2: offset to staticInput data (relative to tuple start)
+    //   [at offset]: length of staticInput
+    //   [at offset+32]: staticInput bytes
+
+    // Extract salt (next 32-byte word = 64 hex chars)
+    const saltPos = handlerFieldPos + 64;
+    if (saltPos + 64 > sigHex.length) continue;
+    const salt = "0x" + sigHex.slice(saltPos, saltPos + 64);
+
+    // Extract staticInput offset (next 32-byte word)
+    const offsetPos = saltPos + 64;
+    if (offsetPos + 64 > sigHex.length) continue;
+    const siOffset = parseInt(sigHex.slice(offsetPos, offsetPos + 64), 16);
+
+    // staticInput data location: tuple start + offset
+    // tuple start = handlerFieldPos (in hex chars)
+    const tupleStartByte = handlerFieldPos / 2;
+    const siDataByte = tupleStartByte + siOffset;
+    const siDataHexPos = siDataByte * 2;
+
+    // Read length word
+    if (siDataHexPos + 64 > sigHex.length) continue;
+    const siLength = parseInt(sigHex.slice(siDataHexPos, siDataHexPos + 64), 16);
+
+    // Read staticInput bytes
+    const siStart = siDataHexPos + 64;
+    if (siStart + siLength * 2 > sigHex.length) continue;
+    const staticInput = ("0x" + sigHex.slice(siStart, siStart + siLength * 2)) as Hex;
+
+    const handler = ("0x" + handlerAddr) as Hex;
+
+    // Compute order hash: keccak256(abi.encode(ConditionalOrderParams))
+    const encoded = encodeAbiParameters(
+      [
+        {
+          type: "tuple",
+          components: [
+            { name: "handler", type: "address" },
+            { name: "salt", type: "bytes32" },
+            { name: "staticInput", type: "bytes" },
+          ],
+        },
+      ],
+      [{ handler, salt: salt as Hex, staticInput }],
+    );
+    const orderHash = keccak256(encoded);
+
+    return {
+      handler: handler.toLowerCase(),
+      salt,
+      staticInput,
+      orderHash,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -128,53 +179,14 @@ export function decodeSettleCalldata(
       if (!signature || signature.length < 200) continue;
 
       // Check flags to determine signature scheme
-      // Bit 6-7 of flags: 0=EIP712, 1=EthSign, 2=EIP1271, 3=PreSign
-      const sigScheme = Number((trade.flags >> 6n) & 3n);
+      // GPv2Trade.extractFlags: signingScheme = Scheme(uint8((flags >> 5) & 0x3))
+      // Bit 5-6 of flags: 0=EIP712, 1=EthSign, 2=EIP1271, 3=PreSign
+      const sigScheme = Number((trade.flags >> 5n) & 3n);
       if (sigScheme !== 2) continue; // Only ERC-1271
 
-      try {
-        const decoded = decodeAbiParameters(
-          ERC1271_SIGNATURE_ABI,
-          signature as Hex,
-        );
-
-        // decoded is: [order, payload]
-        // payload has: { proof, params, offchainInput }
-        // params has: { handler, salt, staticInput }
-        const payload = decoded[1] as {
-          proof: readonly Hex[];
-          params: { handler: Hex; salt: Hex; staticInput: Hex };
-          offchainInput: Hex;
-        };
-        const params = payload.params;
-        const handler = params.handler.toLowerCase();
-        const salt = params.salt;
-        const staticInput = params.staticInput;
-
-        // Compute order hash: keccak256(abi.encode(ConditionalOrderParams))
-        const encoded = encodeAbiParameters(
-          [
-            {
-              type: "tuple",
-              components: [
-                { name: "handler", type: "address" },
-                { name: "salt", type: "bytes32" },
-                { name: "staticInput", type: "bytes" },
-              ],
-            },
-          ],
-          [{ handler: params.handler, salt: params.salt, staticInput: params.staticInput }],
-        );
-        const orderHash = keccak256(encoded);
-
-        result.set(i, {
-          handler,
-          salt,
-          staticInput,
-          orderHash,
-        });
-      } catch {
-        // Not a valid ERC-1271 signature — skip silently
+      const link = extractParamsFromSignature(signature);
+      if (link) {
+        result.set(i, link);
       }
     }
   } catch {

@@ -1,12 +1,9 @@
 import { GPv2Settlement } from "generated";
-import type { Hex } from "viem";
-import { decodeSettleCalldata } from "../utils/settle-decoder.js";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
 
-// Track which settle() transactions we've already decoded to avoid
-// re-decoding the same calldata for every Trade event in the same tx.
-// Map: txHash → Map<tradeIndex, ConditionalOrderLink>
-const decodedTxCache = new Map<string, ReturnType<typeof decodeSettleCalldata>>();
+// Track owners we've already fetched OrderBook orders for in this session
+// to avoid re-creating the same OrderBookOrder entities repeatedly.
+const fetchedOwners = new Set<string>();
 
 GPv2Settlement.Trade.handler(async ({ event, context }) => {
   const owner = event.params.owner.toLowerCase();
@@ -14,49 +11,36 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
   const txHash = event.transaction.hash;
   const tradeId = `${txHash}-${event.logIndex}`;
 
-  // ─── ERC-1271 Signature Decoding ──────────────────────────────────────
-  // Decode settle() calldata to link this trade to its conditional order.
+  // ─── Link to ConditionalOrder by owner lookup ──────────────────────
+  // Instead of decoding settle() calldata (which requires fetching the
+  // full transaction.input — often 5-20KB per tx), we match by owner.
+  // If this owner has a ConditionalOrder, link the trade to it.
   let conditionalOrder_id: string | undefined = undefined;
 
-  const txInput = event.transaction.input;
-  if (txInput && txInput.length > 10) {
-    // Get or compute decoded trades for this transaction
-    let decodedTrades = decodedTxCache.get(txHash);
-    if (!decodedTrades) {
-      decodedTrades = decodeSettleCalldata(txInput as Hex);
-      decodedTxCache.set(txHash, decodedTrades);
+  const ownerOrders = await context.ConditionalOrder.getWhere({
+    owner: { _eq: owner },
+  });
 
-      // Clean cache to prevent memory leak (keep last 100 txs)
-      if (decodedTxCache.size > 100) {
-        const firstKey = decodedTxCache.keys().next().value;
-        if (firstKey) decodedTxCache.delete(firstKey);
-      }
-    }
+  if (ownerOrders.length > 0) {
+    // Link to the most recent active order for this owner on this chain
+    const chainOrders = ownerOrders
+      .filter((o) => o.chainId === chainId)
+      .sort((a, b) => b.blockNumber - a.blockNumber);
 
-    // Find the matching trade by logIndex position.
-    // Trade events are emitted in order, so logIndex within the tx
-    // corresponds to the trade index in the settle() call.
-    // However, logIndex is global to the block, not the tx.
-    // We use a heuristic: try each decoded trade and match by owner.
-    for (const [_idx, link] of decodedTrades) {
-      // The conditional order hash uniquely identifies the order
-      const candidateId = `${link.orderHash}-${chainId}`;
-      const existingOrder = await context.ConditionalOrder.get(candidateId);
-      if (existingOrder && existingOrder.owner === owner) {
-        conditionalOrder_id = candidateId;
-        break;
-      }
+    const activeOrder = chainOrders.find((o) => o.status === "Active") ?? chainOrders[0];
+    if (activeOrder) {
+      conditionalOrder_id = activeOrder.id;
     }
   }
 
-  // ─── Resolve COWShed proxy owner ──────────────────────────────────────
+  // ─── Resolve COWShed proxy owner ──────────────────────────────────
   let realOwner: string | undefined = undefined;
   const proxy = await context.COWShedProxy.get(`${owner}-${chainId}`);
   if (proxy) {
     realOwner = proxy.eoaOwner;
   }
 
-  // ─── Create Trade entity ──────────────────────────────────────────────
+  // ─── Create Trade entity ──────────────────────────────────────────
   context.Trade.set({
     id: tradeId,
     chainId,
@@ -74,40 +58,45 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
     realOwner,
   });
 
-  // ─── OrderBook API Integration ────────────────────────────────────────
+  // ─── OrderBook API Integration ────────────────────────────────────
   // Fetch this owner's orders from the CoW API (cached across re-indexes).
-  // Only do this for owners that have conditional orders (programmatic).
+  // Only fetch once per owner per session to avoid redundant processing.
   if (conditionalOrder_id) {
-    try {
-      const orderBookOrders = await context.effect(fetchOrderBookOrders, {
-        owner,
-        chainId,
-      });
+    const ownerKey = `${owner}-${chainId}`;
+    if (!fetchedOwners.has(ownerKey)) {
+      fetchedOwners.add(ownerKey);
+      try {
+        const orderBookJson = await context.effect(fetchOrderBookOrders, {
+          owner,
+          chainId,
+        });
 
-      if (Array.isArray(orderBookOrders)) {
-        for (const apiOrder of orderBookOrders) {
-          if (!apiOrder.uid) continue;
+        const orderBookOrders = JSON.parse(orderBookJson) as Array<Record<string, unknown>>;
+        if (Array.isArray(orderBookOrders)) {
+          for (const apiOrder of orderBookOrders) {
+            if (!apiOrder.uid) continue;
 
-          context.OrderBookOrder.set({
-            id: apiOrder.uid,
-            orderUid: apiOrder.uid,
-            owner: (apiOrder.owner ?? owner).toLowerCase(),
-            status: apiOrder.status ?? "unknown",
-            sellToken: (apiOrder.sellToken ?? "").toLowerCase(),
-            buyToken: (apiOrder.buyToken ?? "").toLowerCase(),
-            sellAmount: BigInt(apiOrder.sellAmount ?? "0"),
-            buyAmount: BigInt(apiOrder.buyAmount ?? "0"),
-            validTo: Number(apiOrder.validTo ?? 0),
-            chainId,
-            fetchedAt: BigInt(event.block.timestamp),
-            conditionalOrder_id: conditionalOrder_id,
-          });
+            context.OrderBookOrder.set({
+              id: apiOrder.uid as string,
+              orderUid: apiOrder.uid as string,
+              owner: ((apiOrder.owner as string) ?? owner).toLowerCase(),
+              status: (apiOrder.status as string) ?? "unknown",
+              sellToken: ((apiOrder.sellToken as string) ?? "").toLowerCase(),
+              buyToken: ((apiOrder.buyToken as string) ?? "").toLowerCase(),
+              sellAmount: BigInt((apiOrder.sellAmount as string) ?? "0"),
+              buyAmount: BigInt((apiOrder.buyAmount as string) ?? "0"),
+              validTo: Number(apiOrder.validTo ?? 0),
+              chainId,
+              fetchedAt: BigInt(event.block.timestamp),
+              conditionalOrder_id: conditionalOrder_id,
+            });
+          }
         }
+      } catch (err) {
+        context.log.warn(
+          `OrderBook API fetch failed for owner=${owner} chain=${chainId}: ${err}`,
+        );
       }
-    } catch (err) {
-      context.log.warn(
-        `OrderBook API fetch failed for owner=${owner} chain=${chainId}: ${err}`,
-      );
     }
   }
 });

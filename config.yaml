@@ -77,4 +77,3 @@ field_selection:
   transaction_fields:
     - hash
     - from
-    - input # Needed for ERC-1271 signature decoding from settle() calldata
