@@ -1,0 +1,44 @@
+enum OrderType {
+  TWAP
+  StopLoss
+  PerpetualSwap
+  GoodAfterTime
+  TradeAboveThreshold
+  Unknown
+}
+
+enum OrderStatus {
+  Active
+  Cancelled
+}
+
+type ConditionalOrder {
+  id: ID! # keccak256(abi.encode(params)) + "-" + chainId
+  chainId: Int!
+  owner: String! @index
+  handler: String! @index
+  salt: String!
+  staticInput: String!
+  hash: String! @index
+  orderType: OrderType!
+  status: OrderStatus!
+  blockNumber: Int!
+  blockTimestamp: BigInt!
+  transactionHash: String!
+  createdBy: String! # transaction.from
+  # Decoded params stored as JSON
+  decodedParams: Json
+  decodeError: String
+}
+
+type MerkleRoot {
+  id: ID! # owner + "-" + chainId
+  chainId: Int!
+  owner: String! @index
+  root: String!
+  proofLocation: Int!
+  proofData: String!
+  blockNumber: Int!
+  blockTimestamp: BigInt!
+  transactionHash: String!
+}
