@@ -35,3 +35,4 @@ cache
 generated
 .env
 .pnpm-store
+.envio/cache/fetchOrderBookOrders.tsv
