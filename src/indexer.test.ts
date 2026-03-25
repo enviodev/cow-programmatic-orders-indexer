@@ -169,7 +169,7 @@ describe("ConditionalOrderCreated Handler", () => {
     const proxyAddress = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const eoaOwner = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    // Pre-populate a COWShedProxy
+    // Pre-populate a OwnerMapping
     const proxyEvent = COWShedFactory.COWShedBuilt.createMockEvent({
       user: eoaOwner as `0x${string}`,
       shed: proxyAddress as `0x${string}`,
@@ -337,7 +337,7 @@ describe("MerkleRootSet Handler", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("COWShedBuilt Handler", () => {
-  it("should create a COWShedProxy entity mapping proxy to EOA", async () => {
+  it("should create a OwnerMapping entity mapping proxy to EOA", async () => {
     const mockDb = MockDb.createMockDb();
 
     const proxyAddress = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
@@ -360,10 +360,10 @@ describe("COWShedBuilt Handler", () => {
       mockDb,
     });
 
-    const proxies = result.entities.COWShedProxy.getAll();
+    const proxies = result.entities.OwnerMapping.getAll();
     expect(proxies.length).toBe(1);
-    expect(proxies[0]!.proxyAddress).toBe(proxyAddress);
-    expect(proxies[0]!.eoaOwner).toBe(eoaOwner);
+    expect(proxies[0]!.address).toBe(proxyAddress);
+    expect(proxies[0]!.owner).toBe(eoaOwner);
   });
 
   it("should use proxyAddress-chainId as entity ID", async () => {
@@ -380,7 +380,7 @@ describe("COWShedBuilt Handler", () => {
       mockDb,
     });
 
-    const proxy = result.entities.COWShedProxy.getAll()[0]!;
+    const proxy = result.entities.OwnerMapping.getAll()[0]!;
     expect(proxy.id).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-100");
   });
 
@@ -564,7 +564,7 @@ describe("Trade Handler", () => {
     const proxyAddress = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
     const eoaOwner = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
 
-    // Create COWShedProxy
+    // Create OwnerMapping
     const shedEvent = COWShedFactory.COWShedBuilt.createMockEvent({
       user: eoaOwner,
       shed: proxyAddress,

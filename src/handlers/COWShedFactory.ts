@@ -1,26 +1,28 @@
 import { COWShedFactory } from "generated";
-import { cowShedProxies } from "../utils/owner-cache.js";
+import { resolvedOwners } from "../utils/owner-cache.js";
 
 // ─── COWShedBuilt ───────────────────────────────────────────────────────────
 // Emitted when a COWShed proxy is deployed for an EOA.
-// Maps: proxy address → EOA owner
+// Maps: proxy address → EOA owner in OwnerMapping.
 
 COWShedFactory.COWShedBuilt.handler(async ({ event, context }) => {
   const proxyAddress = event.params.shed.toLowerCase();
   const eoaOwner = event.params.user.toLowerCase();
   const chainId = event.chainId;
 
-  context.COWShedProxy.set({
+  context.OwnerMapping.set({
     id: `${proxyAddress}-${chainId}`,
-    proxyAddress,
-    eoaOwner,
+    address: proxyAddress,
+    owner: eoaOwner,
     chainId,
+    addressType: "CowShedProxy",
+    resolutionDepth: 0, // direct mapping, no hops
     blockNumber: event.block.number,
     transactionHash: event.transaction.hash,
   });
 
   // Cache so Trade handler can skip DB lookups for non-proxy owners
-  cowShedProxies.set(`${proxyAddress}-${chainId}`, eoaOwner);
+  resolvedOwners.set(`${proxyAddress}-${chainId}`, eoaOwner);
 
   // Retroactively update any ConditionalOrders owned by this proxy
   // that were indexed before the proxy deployment was seen.

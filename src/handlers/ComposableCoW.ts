@@ -54,11 +54,11 @@ ComposableCoW.ConditionalOrderCreated.handler(async ({ event, context }) => {
     }
   }
 
-  // M2: Resolve COWShed proxy owner if available
+  // M2: Resolve proxy/adapter owner if available (COWShed or Aave adapter)
   let realOwner: string | undefined = undefined;
-  const proxy = await context.COWShedProxy.get(`${owner}-${chainId}`);
-  if (proxy) {
-    realOwner = proxy.eoaOwner;
+  const mapping = await context.OwnerMapping.get(`${owner}-${chainId}`);
+  if (mapping) {
+    realOwner = mapping.owner;
   }
 
   context.ConditionalOrder.set({

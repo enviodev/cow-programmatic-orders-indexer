@@ -130,7 +130,7 @@ describe("M1: MerkleRootSet", () => {
 // ─── M2: COWShed Proxy Creation ──────────────────────────────────────────
 
 describe("M2: COWShed Proxy Creation", () => {
-  it("should create COWShedProxy from real COWShedBuilt event", async () => {
+  it("should create OwnerMapping from real COWShedBuilt event", async () => {
     const indexer = createTestIndexer();
 
     // Block 22981721 has a real COWShedBuilt event on mainnet
@@ -141,19 +141,19 @@ describe("M2: COWShed Proxy Creation", () => {
     });
 
     const proxies = result.changes
-      .flatMap((c) => c.COWShedProxy?.sets ?? []);
+      .flatMap((c) => c.OwnerMapping?.sets ?? []);
 
     expect(proxies.length).toBeGreaterThanOrEqual(1);
 
     const proxy = proxies.find(
-      (p) => p.proxyAddress === "0xadc605b8c1f31efce19d9cb1a26cfa4af7f2f4e4",
+      (p) => p.address === "0xadc605b8c1f31efce19d9cb1a26cfa4af7f2f4e4",
     );
     expect(proxy).toBeDefined();
-    expect(proxy!.eoaOwner).toBe("0x9fa3c00a92ec5f96b1ad2527ab41b3932efeda58");
+    expect(proxy!.owner).toBe("0x9fa3c00a92ec5f96b1ad2527ab41b3932efeda58");
     expect(proxy!.chainId).toBe(1);
   }, 30_000);
 
-  it("should create multiple COWShedProxy entities from batch deployment", async () => {
+  it("should create multiple OwnerMapping entities from batch deployment", async () => {
     const indexer = createTestIndexer();
 
     // Block 22982583-22982665 has a burst of COWShedBuilt events
@@ -164,19 +164,19 @@ describe("M2: COWShed Proxy Creation", () => {
     });
 
     const proxies = result.changes
-      .flatMap((c) => c.COWShedProxy?.sets ?? []);
+      .flatMap((c) => c.OwnerMapping?.sets ?? []);
 
     expect(proxies.length).toBeGreaterThan(1);
 
     // Each proxy should have unique proxyAddress
-    const proxyAddresses = new Set(proxies.map((p) => p.proxyAddress));
+    const proxyAddresses = new Set(proxies.map((p) => p.address));
     expect(proxyAddresses.size).toBe(proxies.length);
 
     // All should be on chain 1
     for (const proxy of proxies) {
       expect(proxy.chainId).toBe(1);
-      expect(proxy.proxyAddress).toMatch(/^0x[a-f0-9]{40}$/);
-      expect(proxy.eoaOwner).toMatch(/^0x[a-f0-9]{40}$/);
+      expect(proxy.address).toMatch(/^0x[a-f0-9]{40}$/);
+      expect(proxy.owner).toMatch(/^0x[a-f0-9]{40}$/);
     }
   }, 60_000);
 
@@ -190,10 +190,10 @@ describe("M2: COWShed Proxy Creation", () => {
     });
 
     const proxies = result.changes
-      .flatMap((c) => c.COWShedProxy?.sets ?? []);
+      .flatMap((c) => c.OwnerMapping?.sets ?? []);
 
     for (const proxy of proxies) {
-      expect(proxy.id).toBe(`${proxy.proxyAddress}-${proxy.chainId}`);
+      expect(proxy.id).toBe(`${proxy.address}-${proxy.chainId}`);
     }
   }, 30_000);
 });

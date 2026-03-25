@@ -1,8 +1,10 @@
 import { GPv2Settlement } from "generated";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
+import { checkAaveAdapter } from "../effects/rpc.js";
 import {
   conditionalOrderOwners,
-  cowShedProxies,
+  resolvedOwners,
+  checkedNonAdapters,
 } from "../utils/owner-cache.js";
 
 // Track owners we've already fetched OrderBook orders for in this session
@@ -24,13 +26,60 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
     conditionalOrder_id = conditionalOrderOwners.get(ownerKey);
   }
 
-  // ─── Resolve COWShed proxy owner (cache-gated) ─────────────────
-  // Only lookup if this address was seen in a COWShedBuilt event.
+  // ─── Resolve proxy/adapter owner (cache-gated) ──────────────────
+  // Only check for Aave adapters if this owner created a conditional order.
+  // This avoids RPC calls for 99%+ of trades that aren't programmatic.
   let realOwner: string | undefined = undefined;
 
-  if (cowShedProxies.has(ownerKey)) {
-    realOwner = cowShedProxies.get(ownerKey);
+  if (resolvedOwners.has(ownerKey)) {
+    // Already resolved (COWShed proxy or previously detected Aave adapter)
+    realOwner = resolvedOwners.get(ownerKey);
+  } else if (conditionalOrderOwners.has(ownerKey) && !checkedNonAdapters.has(ownerKey)) {
+    // Owner has conditional orders but isn't resolved yet — try Aave adapter detection
+    const result = await context.effect(checkAaveAdapter, {
+      address: owner,
+      chainId,
+    });
+
+    if (result) {
+      const parsed = JSON.parse(result) as { owner: string };
+      realOwner = parsed.owner;
+      resolvedOwners.set(ownerKey, realOwner);
+
+      // Persist the mapping
+      context.OwnerMapping.set({
+        id: `${owner}-${chainId}`,
+        address: owner,
+        owner: realOwner,
+        chainId,
+        addressType: "FlashLoanHelper",
+        resolutionDepth: 1, // one hop via owner()
+        blockNumber: event.block.number,
+        transactionHash: txHash,
+      });
+
+      // Retroactively update ConditionalOrders owned by this adapter
+      const existingOrders = await context.ConditionalOrder.getWhere({
+        owner: { _eq: owner },
+      });
+      for (const order of existingOrders) {
+        context.ConditionalOrder.set({
+          ...order,
+          realOwner,
+        });
+      }
+
+      if (!context.isPreload) {
+        context.log.info(
+          `Aave adapter detected: ${owner} → EOA ${realOwner} (chain=${chainId})`,
+        );
+      }
+    } else {
+      // Not an adapter — cache to avoid future RPC calls
+      checkedNonAdapters.add(ownerKey);
+    }
   }
+
   // ─── Create Trade entity ──────────────────────────────────────────
   context.Trade.set({
     id: tradeId,

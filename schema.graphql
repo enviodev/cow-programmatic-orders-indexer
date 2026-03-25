@@ -12,6 +12,11 @@ enum OrderStatus {
   Cancelled
 }
 
+enum AddressType {
+  CowShedProxy
+  FlashLoanHelper
+}
+
 # ─── M1: Composable CoW Orders ──────────────────────────────────────────────
 
 type ConditionalOrder {
@@ -23,7 +28,7 @@ type ConditionalOrder {
   staticInput: String!
   hash: String! @index
   orderType: OrderType!
-  status: OrderStatus!
+  status: OrderStatus! @index
   blockNumber: Int!
   blockTimestamp: BigInt!
   transactionHash: String!
@@ -48,13 +53,15 @@ type MerkleRoot {
   transactionHash: String!
 }
 
-# ─── M2: COWShed Proxy Ownership ────────────────────────────────────────────
+# ─── M2: Owner Mapping (COWShed + Aave adapter proxy resolution) ───────────
 
-type COWShedProxy {
-  id: ID! # proxy address + "-" + chainId
-  proxyAddress: String! @index
-  eoaOwner: String! @index
+type OwnerMapping {
+  id: ID! # address + "-" + chainId
+  address: String! @index # proxy/adapter contract address
+  owner: String! @index # resolved EOA owner
   chainId: Int!
+  addressType: AddressType!
+  resolutionDepth: Int! # 0 = direct (COWShed), 1 = one hop (Aave via owner())
   blockNumber: Int!
   transactionHash: String!
 }
