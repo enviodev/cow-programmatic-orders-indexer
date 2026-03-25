@@ -67,7 +67,7 @@ export const checkAaveAdapter = createEffect(
     input: S.schema({ address: S.string, chainId: S.number }),
     output: S.union([S.string, null]),
     cache: true,
-    rateLimit: { calls: 100, per: "second" as const },
+    rateLimit: { calls: 300, per: "second" as const },
   },
   async ({ input }): Promise<string | null> => {
     const client = getClient(input.chainId);
