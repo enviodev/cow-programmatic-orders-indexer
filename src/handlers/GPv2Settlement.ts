@@ -74,7 +74,7 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
             buyToken: ((apiOrder.buyToken as string) ?? "").toLowerCase(),
             sellAmount: BigInt((apiOrder.sellAmount as string) ?? "0"),
             buyAmount: BigInt((apiOrder.buyAmount as string) ?? "0"),
-            validTo: Number(apiOrder.validTo ?? 0),
+            validTo: BigInt(Number(apiOrder.validTo ?? 0)),
             chainId,
             fetchedAt: BigInt(event.block.timestamp),
             conditionalOrder_id: conditionalOrder_id,

@@ -89,7 +89,7 @@ type OrderBookOrder {
   buyToken: String!
   sellAmount: BigInt!
   buyAmount: BigInt!
-  validTo: Int!
+  validTo: BigInt!
   chainId: Int!
   fetchedAt: BigInt!
   # Linked conditional order generator
