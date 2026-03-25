@@ -1,6 +1,9 @@
 import { GPv2Settlement } from "generated";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
-import { conditionalOrderOwners, cowShedProxies } from "../utils/owner-cache.js";
+import {
+  conditionalOrderOwners,
+  cowShedProxies,
+} from "../utils/owner-cache.js";
 
 // Track owners we've already fetched OrderBook orders for in this session
 const fetchedOwners = new Set<string>();
@@ -28,7 +31,6 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
   if (cowShedProxies.has(ownerKey)) {
     realOwner = cowShedProxies.get(ownerKey);
   }
-
   // ─── Create Trade entity ──────────────────────────────────────────
   context.Trade.set({
     id: tradeId,
@@ -56,7 +58,9 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
         chainId,
       });
 
-      const orderBookOrders = JSON.parse(orderBookJson) as Array<Record<string, unknown>>;
+      const orderBookOrders = JSON.parse(orderBookJson) as Array<
+        Record<string, unknown>
+      >;
       if (Array.isArray(orderBookOrders)) {
         for (const apiOrder of orderBookOrders) {
           if (!apiOrder.uid) continue;
