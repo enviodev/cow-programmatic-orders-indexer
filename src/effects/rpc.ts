@@ -34,6 +34,16 @@ function getClient(chainId: number): PublicClient | null {
 const AAVE_V3_ADAPTER_FACTORY_ADDRESS =
   "0xdecc46a4b09162f5369c5c80383aaa9159bcf192";
 
+// First block where the factory exists on each chain (OwnershipTransferred log).
+// Adapters cannot exist before these blocks, so skip the RPC check entirely.
+export const AAVE_FACTORY_DEPLOY_BLOCK: Record<number, number> = {
+  1: 23_812_751, // Ethereum
+  100: 43_177_077, // Gnosis
+  42161: 400_913_741, // Arbitrum
+  8453: 38_260_337, // Base
+  // Sepolia: not deployed
+};
+
 const ADAPTER_ABI = [
   {
     inputs: [],
@@ -57,7 +67,7 @@ export const checkAaveAdapter = createEffect(
     input: S.schema({ address: S.string, chainId: S.number }),
     output: S.union([S.string, null]),
     cache: true,
-    rateLimit: { calls: 10, per: "second" as const },
+    rateLimit: { calls: 100, per: "second" as const },
   },
   async ({ input }): Promise<string | null> => {
     const client = getClient(input.chainId);

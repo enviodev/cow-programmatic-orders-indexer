@@ -1,6 +1,6 @@
 import { GPv2Settlement } from "generated";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
-import { checkAaveAdapter } from "../effects/rpc.js";
+import { checkAaveAdapter, AAVE_FACTORY_DEPLOY_BLOCK } from "../effects/rpc.js";
 import {
   conditionalOrderOwners,
   resolvedOwners,
@@ -26,16 +26,23 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
     conditionalOrder_id = conditionalOrderOwners.get(ownerKey);
   }
 
-  // ─── Resolve proxy/adapter owner (cache-gated) ──────────────────
-  // Only check for Aave adapters if this owner created a conditional order.
-  // This avoids RPC calls for 99%+ of trades that aren't programmatic.
+  // ─── Resolve proxy/adapter owner ────────────────────────────────
+  // Check for Aave V3 flash loan adapters, but only for trades after the
+  // factory was deployed on this chain. Adapters can't exist before then,
+  // so the block gate skips 99%+ of historical trades with zero RPC cost.
   let realOwner: string | undefined = undefined;
+
+  const factoryDeployBlock = AAVE_FACTORY_DEPLOY_BLOCK[chainId];
 
   if (resolvedOwners.has(ownerKey)) {
     // Already resolved (COWShed proxy or previously detected Aave adapter)
     realOwner = resolvedOwners.get(ownerKey);
-  } else if (conditionalOrderOwners.has(ownerKey) && !checkedNonAdapters.has(ownerKey)) {
-    // Owner has conditional orders but isn't resolved yet — try Aave adapter detection
+  } else if (
+    factoryDeployBlock &&
+    event.block.number >= factoryDeployBlock &&
+    !checkedNonAdapters.has(ownerKey)
+  ) {
+    // Trade is after factory deployment and address hasn't been checked yet
     const result = await context.effect(checkAaveAdapter, {
       address: owner,
       chainId,
