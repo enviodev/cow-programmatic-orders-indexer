@@ -1,32 +1,26 @@
 # CoW Programmatic Orders Indexer
 
-A multichain CoW Protocol indexer focused on programmatic orders, COWShed ownership mappings, and GPv2 trade tracking. Built with [Envio HyperIndex](https://docs.envio.dev).
+CoW Protocol Programmatic Orders Indexer (Composable CoW, COWShed ownership, GPv2 trade tracking). Built with [Envio HyperIndex](https://docs.envio.dev).
 
 ## Chains
 
-| Chain | ID |
+| Network | Chain ID |
 |---|---|
 | Ethereum Mainnet | 1 |
 | Gnosis | 100 |
-| Base | 8453 |
 | Arbitrum | 42161 |
-| Sepolia (testnet) | 11155111 |
+| Base | 8453 |
+| Sepolia | 11155111 |
 
-## What it indexes
+## Contracts
 
-- **`ComposableCoW`**: `ConditionalOrderCreated`, `MerkleRootSet`. Captures the conditional-order schemes attached to each owner and any Merkle-root commitments.
-- **`COWShedFactory`**: `COWShedBuilt`. Maps each COWShed contract to its underlying owner.
-- **`GPv2Settlement`**: `Trade`. Captures fills produced by the CoW settlement contract.
+- **`ComposableCoW`**: `ConditionalOrderCreated`, `MerkleRootSet`
+- **`COWShedFactory`**: `COWShedBuilt`
+- **`GPv2Settlement`**: `Trade`
 
-## Schema
+## Schema entities (5)
 
-5 GraphQL entities:
-
-- `ConditionalOrder`: programmatic conditional order definitions
-- `MerkleRoot`: per-owner Merkle-root commitments
-- `OwnerMapping`: COWShed-to-owner relationships
-- `Trade`: GPv2 settlement fills
-- `OrderBookOrder`: orderbook-tracked orders
+`ConditionalOrder`, `MerkleRoot`, `OwnerMapping`, `Trade`, `OrderBookOrder`
 
 ## Run locally
 
