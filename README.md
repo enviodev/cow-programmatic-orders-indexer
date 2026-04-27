@@ -7,9 +7,9 @@ A multichain CoW Protocol indexer focused on programmatic orders, COWShed owners
 | Chain | ID |
 |---|---|
 | Ethereum Mainnet | 1 |
-| Gnosis Chain | 100 |
+| Gnosis | 100 |
 | Base | 8453 |
-| Arbitrum One | 42161 |
+| Arbitrum | 42161 |
 | Sepolia (testnet) | 11155111 |
 
 ## What it indexes
