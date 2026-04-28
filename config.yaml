@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
 name: cow-programmatic-orders
-description: CoW Protocol Programmatic Orders Indexer — Composable CoW, COWShed ownership, and GPv2 trade tracking
+description: CoW Protocol Programmatic Orders Indexer (Composable CoW, COWShed ownership, GPv2 trade tracking)
 
 contracts:
   - name: ComposableCoW
