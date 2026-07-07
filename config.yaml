@@ -52,8 +52,7 @@ chains:
         address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
         start_block: 43177077 # AaveV3AdapterFactory deployment block on Gnosis
 
+# number/timestamp/hash block fields are always selected by default.
 field_selection:
   transaction_fields:
     - hash
-  block_fields:
-    - timestamp

@@ -23,7 +23,7 @@ if (!isTest) {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
-      const currentTimestamp = blockTimestamp(block);
+      const currentTimestamp = await blockTimestamp(context, block);
 
       const maxOrdersPerBlock = resolveCap(
         `MAX_DISCRETE_ORDERS_PER_BLOCK_${chainId}`,

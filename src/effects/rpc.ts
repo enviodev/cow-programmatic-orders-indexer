@@ -408,6 +408,34 @@ export const scanAaveSettlement = createEffect(
   },
 );
 
+// ─── Block timestamp lookup ─────────────────────────────────────────────────
+// envio onBlock handlers only receive the block number; upstream block handlers
+// use event.block.timestamp. Cached forever (mined-block header is immutable).
+
+export const getBlockTimestamp = createEffect(
+  {
+    name: "getBlockTimestamp",
+    input: S.schema({ chainId: S.number, blockNumber: S.number }),
+    output: S.union([S.number, null]),
+    cache: true,
+    rateLimit: { calls: 10, per: "second" as const },
+  },
+  async ({ input }): Promise<number | null> => {
+    const client = getClient(input.chainId);
+    if (!client) return null;
+    try {
+      const block = await withTimeout(
+        client.getBlock({ blockNumber: BigInt(input.blockNumber) }),
+        SETTLEMENT_INNER_RPC_TIMEOUT_MS,
+        "getBlockTimestamp",
+      );
+      return Number(block.timestamp);
+    } catch {
+      return null;
+    }
+  },
+);
+
 // ─── CirclesBackingOrder handler immutables ─────────────────────────────────
 // Handler-instance constants (set in the constructor) — identical for every
 // generator that references the same handler address. Cached indefinitely.

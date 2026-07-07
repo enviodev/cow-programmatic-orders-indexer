@@ -44,7 +44,7 @@ if (!isTest) {
       let missing = 0;
       for (let i = 0; i < pending.length; i += FLASH_LOAN_BACKFILL_SLICE_SIZE) {
         const slice = pending.slice(i, i + FLASH_LOAN_BACKFILL_SLICE_SIZE);
-        const r = await enrichFlashLoanOrders(context, chainId, blockTimestamp(block), slice);
+        const r = await enrichFlashLoanOrders(context, chainId, (await blockTimestamp(context, block)), slice);
         enriched += r.enriched;
         missing += r.missing;
       }
@@ -73,7 +73,7 @@ if (!isTest) {
       if (pending.length === 0) return;
 
       const { enriched, missing } = await enrichFlashLoanOrders(
-        context, chainId, blockTimestamp(block), pending,
+        context, chainId, await blockTimestamp(context, block), pending,
       );
 
       if (!context.isPreload) {

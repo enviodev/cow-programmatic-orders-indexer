@@ -27,16 +27,21 @@ export function resolveCap(envVar: string, fallback: number): number {
 export const isTest = typeof process !== "undefined" && !!process.env.VITEST;
 
 /**
- * Read the block timestamp in an onBlock handler. Selected via
- * `field_selection.block_fields: [timestamp]` in config.yaml; the static
- * onBlock arg type only declares `number`, hence the cast.
+ * Resolve the block timestamp in an onBlock handler. envio only passes the
+ * block number to onBlock handlers, so this reads the header via the cached
+ * getBlockTimestamp effect. Falls back to wall-clock when no RPC is
+ * configured — acceptable because every caller runs at realtime, where the
+ * head block timestamp is within seconds of now.
  */
-export function blockTimestamp(block: { number: number }): bigint {
-  const ts = (block as { number: number; timestamp?: number }).timestamp;
-  if (ts === undefined) {
-    throw new Error(
-      "block.timestamp missing — ensure field_selection.block_fields includes 'timestamp' in config.yaml",
-    );
-  }
-  return BigInt(ts);
+export async function blockTimestamp(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  block: { number: number },
+): Promise<bigint> {
+  const { getBlockTimestamp } = await import("../effects/rpc.js");
+  const ts = await context.effect(getBlockTimestamp, {
+    chainId: context.chain.id,
+    blockNumber: block.number,
+  });
+  return ts == null ? BigInt(Math.floor(Date.now() / 1000)) : BigInt(ts);
 }

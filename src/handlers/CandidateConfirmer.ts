@@ -73,7 +73,7 @@ if (!isTest) {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
-      const currentTimestamp = blockTimestamp(block);
+      const currentTimestamp = await blockTimestamp(context, block);
 
       // Parent-cancelled cascade: candidates whose parent generator flipped to
       // Cancelled never hit the orderbook, so skip the API and promote them

@@ -78,7 +78,7 @@ if (!isTest) {
         RECHECK_INTERVAL_BLOCKS_BY_CHAIN_ID[chainId] ?? DEFAULT_RECHECK_INTERVAL_BLOCKS;
 
       const currentBlock = BigInt(block.number);
-      const currentTimestamp = blockTimestamp(block);
+      const currentTimestamp = await blockTimestamp(context, block);
 
       const maxGeneratorsPerBlock = resolveCap(
         `MAX_GENERATORS_PER_BLOCK_${chainId}`,
