@@ -74,7 +74,15 @@ async function drainOwnerBatch(
   let discovered = 0;
   let drained = 0;
 
-  for (const owner of owners) {
+  // Drain owners with bounded parallelism. Upstream loops sequentially, but
+  // the drain runs inside the (serial) batch-processing loop, so its wall time
+  // directly starves event processing — metrics showed the account-orders
+  // effect alone at ~54% of backfill wall time. Per-owner drains are
+  // independent (distinct progress rows, distinct cache rows), and the
+  // orderbook 429 backoff remains the API-level throttle.
+  const DRAIN_CONCURRENCY = 5;
+
+  async function drainOne(owner: Hex): Promise<void> {
     try {
       // The deadline is passed through so a timed-out drain's orphaned
       // continuation bails cooperatively instead of touching handler context
@@ -101,10 +109,14 @@ async function drainOwnerBatch(
     } catch (err) {
       if (err instanceof TimeoutError) {
         log("warn", "OwnerBackfill:owner_timeout", { block: String(currentBlock), chainId, owner, timeoutMs: BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS });
-        continue; // leave eligible — retried next block
+        return; // leave eligible — retried next block
       }
       throw err;
     }
+  }
+
+  for (let i = 0; i < owners.length; i += DRAIN_CONCURRENCY) {
+    await Promise.all(owners.slice(i, i + DRAIN_CONCURRENCY).map(drainOne));
   }
 
   if (!context.isPreload) {

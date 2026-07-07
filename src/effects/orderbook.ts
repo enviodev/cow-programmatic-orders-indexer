@@ -210,7 +210,10 @@ export const orderbookAccountOrders = createEffect(
     }),
     output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
     cache: false, // statuses change over time
-    rateLimit: { calls: 5, per: "second" as const },
+    // Generous: upstream has no client-side limit — the ported 429/Retry-After
+    // backoff in fetchOrderbook is the real throttle. A tight limit here just
+    // serializes the backfill (measured 341s of 700s uptime in this effect).
+    rateLimit: { calls: 20, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
@@ -234,7 +237,9 @@ export const orderbookOrdersByUids = createEffect(
     input: S.schema({ chainId: S.number, uidsJson: S.string }),
     output: S.string, // JSON OrderbookOrder[]
     cache: false, // statuses change over time; terminal results are cached in OrderUidCache
-    rateLimit: { calls: 10, per: "second" as const },
+    // Generous: see orderbookAccountOrders — 429 backoff is the real throttle.
+    // (10/s previously cost 72s of rate-limit queue wait in a 700s backfill.)
+    rateLimit: { calls: 50, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
