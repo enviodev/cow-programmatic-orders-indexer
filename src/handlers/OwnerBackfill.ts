@@ -76,8 +76,12 @@ async function drainOwnerBatch(
 
   for (const owner of owners) {
     try {
+      // The deadline is passed through so a timed-out drain's orphaned
+      // continuation bails cooperatively instead of touching handler context
+      // after this handler has resolved.
+      const deadline = Date.now() + BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS;
       const { orders, complete } = await withTimeout(
-        fetchComposableOrders(context, chainId, owner),
+        fetchComposableOrders(context, chainId, owner, deadline),
         BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
         `OwnerBackfill:owner:${owner}`,
       );

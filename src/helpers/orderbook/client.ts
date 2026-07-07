@@ -63,7 +63,13 @@ export async function fetchComposableOrders(
   context: any,
   chainId: number,
   owner: Hex,
+  // Epoch-ms deadline (cooperative): callers that race this promise against a
+  // timeout pass the same deadline so the orphaned continuation stops BEFORE
+  // touching handler context after the handler resolved (envio rejects late
+  // entity access). Expired → returns complete:false, retried on a later block.
+  deadline?: number,
 ): Promise<{ orders: ComposableOrder[]; complete: boolean }> {
+  const expired = () => deadline !== undefined && Date.now() >= deadline;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
   if (!apiBaseUrl) {
     log("warn", "ob:noApiUrl", { chainId });
@@ -79,17 +85,21 @@ export async function fetchComposableOrders(
   const { orders: deltaApiOrders, complete } = await fetchAccountOrders(
     context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
   );
+  if (expired()) return { orders: [], complete: false };
   const delta = await filterAndProcess(context, chainId, deltaApiOrders);
+  if (expired()) return { orders: [], complete: false };
 
   // Persist the delta (account-endpoint status is the live status) into the durable cache.
   await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
 
   // Rebuild the full owner set from the durable cache (delta + everything older).
   const cachedRows = await readOwnerComposableCache(context, chainId, owner);
+  if (expired()) return { orders: [], complete: false };
 
   // Re-check any still-open cached rows — long-lived orders that terminated below the
   // cursor since a prior drain would otherwise keep a stale "open" status forever.
   const reconciled = await reconcileOpenCachedRows(context, chainId, owner, cachedRows);
+  if (expired()) return { orders: [], complete: false };
 
   // Re-map by the stable hash to the current generator id.
   const results = await remapToCurrentGenerators(context, chainId, reconciled);
