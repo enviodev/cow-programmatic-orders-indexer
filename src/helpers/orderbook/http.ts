@@ -16,7 +16,7 @@ export { OrderbookUnavailableError };
 
 /** Fetch orders for an owner with pagination. maxPages limits how many pages are
  *  fetched (0 = unlimited). sinceCreationDate (Unix seconds) enables the
- *  incremental drain (see upstream docs). */
+ *  incremental delta drain; startOffset resumes a bounded full-history drain. */
 export async function fetchAccountOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -26,7 +26,8 @@ export async function fetchAccountOrders(
   signingScheme?: string,
   pageSize = PAGE_LIMIT,
   sinceCreationDate?: number,
-): Promise<{ orders: OrderbookOrder[]; complete: boolean }> {
+  startOffset = 0,
+): Promise<{ orders: OrderbookOrder[]; complete: boolean; nextOffset: number }> {
   const json = await context.effect(orderbookAccountOrders, {
     chainId,
     owner,
@@ -34,8 +35,9 @@ export async function fetchAccountOrders(
     signingScheme,
     pageSize,
     since: sinceCreationDate,
+    offset: startOffset,
   });
-  return JSON.parse(json) as { orders: OrderbookOrder[]; complete: boolean };
+  return JSON.parse(json) as { orders: OrderbookOrder[]; complete: boolean; nextOffset: number };
 }
 
 /** Batch-fetch orders by UID to refresh status of open orders. */

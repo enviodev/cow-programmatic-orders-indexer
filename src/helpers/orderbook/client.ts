@@ -47,16 +47,35 @@ import {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+// Pages fetched per firing during the bounded full-history drain. Large owners
+// (market makers with tens of thousands of orders) drain across multiple
+// OwnerBackfill firings; each page is up to 1000 orders / several MB.
+const DRAIN_PAGES_PER_FIRING = 3;
+
 /**
  * Fetch composable orders for an owner, using the per-UID cache for terminal
- * orders and the durable ComposableOrderCache for the incremental drain:
+ * orders and the durable ComposableOrderCache for the incremental drain.
  *
- * 1. cursor = newest creationDate already cached for this owner (undefined = full drain)
+ * Two phases, tracked in OwnerDrainProgress:
+ *
+ * A. Full-history drain (progress.complete=false): fetch a bounded window of
+ *    DRAIN_PAGES_PER_FIRING pages from progress.nextOffset, persist the delta,
+ *    advance the offset, and return complete=false until the last page is
+ *    reached. This replaces upstream's unbounded single fetch — in ponder a
+ *    timed-out drain's orphaned promise still finishes its cow_cache writes in
+ *    the background, but envio rejects entity writes after the handler
+ *    resolves, so progress must be made durable within each firing. (Offset
+ *    drift from new orders arriving mid-drain only pushes rows to higher
+ *    offsets — re-fetch, never skip; upserts make re-fetch harmless.)
+ *
+ * B. Delta drain (progress.complete=true — upstream's steady state):
+ * 1. cursor = newest creationDate already cached for this owner
  * 2. Fetch /account/{owner}/orders newest-first, stopping once older than the cursor
  * 3. Decode → filter to composable → match to generators, then persist the delta
- * 4. Rebuild the full owner set from the durable cache (delta + all older rows)
- * 5. Re-check any still-open cached rows via by_uids so statuses don't go stale
- * 6. Re-map generatorHash → the current generator id
+ *
+ * Then (both phases, once complete): rebuild the full owner set from the
+ * durable cache, re-check still-open cached rows via by_uids, and re-map
+ * generatorHash → the current generator id.
  */
 export async function fetchComposableOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,35 +95,75 @@ export async function fetchComposableOrders(
     return { orders: [], complete: false };
   }
 
-  // Only fetch orders newer than what we've already durably cached for this owner.
-  const cursor = await readOwnerBackfillCursor(context, chainId, owner);
-  log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
+  const progressId = `${chainId}_${owner.toLowerCase()}`;
+  const progress = await context.OwnerDrainProgress.get(progressId);
 
-  // complete=false (pagination cut short by rate limit / timeout) means the caller must
-  // NOT mark the owner backfilled — it stays eligible and is retried on a later block.
-  const { orders: deltaApiOrders, complete } = await fetchAccountOrders(
-    context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
-  );
-  if (expired()) return { orders: [], complete: false };
-  const delta = await filterAndProcess(context, chainId, deltaApiOrders);
-  if (expired()) return { orders: [], complete: false };
+  let complete: boolean;
+  let deltaCount = 0;
 
-  // Persist the delta (account-endpoint status is the live status) into the durable cache.
-  await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+  if (!progress?.complete) {
+    // Phase A — bounded, resumable full-history drain.
+    const startOffset = progress?.nextOffset ?? 0;
+    log("info", "ob:fetch", { owner, chainId, phase: "history", offset: startOffset });
+
+    const page = await fetchAccountOrders(
+      context, chainId, owner, DRAIN_PAGES_PER_FIRING, SIGNING_SCHEME_EIP1271,
+      PAGE_LIMIT, undefined, startOffset,
+    );
+    if (expired()) return { orders: [], complete: false };
+
+    const delta = await filterAndProcess(context, chainId, page.orders);
+    if (expired()) return { orders: [], complete: false };
+    await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+    deltaCount = delta.length;
+
+    // Persist resume state — this is what makes retries converge. Only advance
+    // when the window actually progressed (an errored first page keeps state).
+    if (page.nextOffset > startOffset || page.complete) {
+      context.OwnerDrainProgress.set({
+        id: progressId,
+        chainId,
+        owner: owner.toLowerCase(),
+        nextOffset: page.nextOffset,
+        complete: page.complete,
+      });
+    }
+    complete = page.complete;
+
+    if (!complete) {
+      log("info", "ob:fetchResult", { owner, chainId, phase: "history", delta: deltaCount, nextOffset: page.nextOffset, complete });
+      return { orders: [], complete: false }; // resumed next firing
+    }
+  } else {
+    // Phase B — incremental delta drain from the creation-date cursor.
+    const cursor = await readOwnerBackfillCursor(context, chainId, owner);
+    log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
+
+    const delta_ = await fetchAccountOrders(
+      context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
+    );
+    if (expired()) return { orders: [], complete: false };
+    const delta = await filterAndProcess(context, chainId, delta_.orders);
+    if (expired()) return { orders: [], complete: false };
+    await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+    deltaCount = delta.length;
+    complete = delta_.complete;
+    if (!complete) return { orders: [], complete: false };
+  }
 
   // Rebuild the full owner set from the durable cache (delta + everything older).
   const cachedRows = await readOwnerComposableCache(context, chainId, owner);
   if (expired()) return { orders: [], complete: false };
 
-  // Re-check any still-open cached rows — long-lived orders that terminated below the
-  // cursor since a prior drain would otherwise keep a stale "open" status forever.
+  // Re-check any still-open cached rows — long-lived orders that terminated
+  // earlier would otherwise keep a stale "open" status forever.
   const reconciled = await reconcileOpenCachedRows(context, chainId, owner, cachedRows);
   if (expired()) return { orders: [], complete: false };
 
   // Re-map by the stable hash to the current generator id.
   const results = await remapToCurrentGenerators(context, chainId, reconciled);
 
-  log("info", "ob:fetchResult", { owner, chainId, since: cursor ?? null, delta: delta.length, total: results.length, complete });
+  log("info", "ob:fetchResult", { owner, chainId, delta: deltaCount, total: results.length, complete });
   return { orders: results, complete };
 }
 

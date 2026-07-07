@@ -189,6 +189,19 @@ type OrderUidCache {
   buyAmount: String
 }
 
+# Per-owner OwnerBackfill drain progress. Upstream relies on the timed-out
+# drain's orphaned promise finishing its cow_cache writes in the background;
+# envio rejects entity writes after a handler resolves, so instead the drain is
+# resumable: each firing fetches a bounded page window from nextOffset and
+# persists it, and `complete` flips once the last page is reached.
+type OwnerDrainProgress {
+  id: ID! # chainId + "_" + owner
+  chainId: Int!
+  owner: String!
+  nextOffset: Int!
+  complete: Boolean!
+}
+
 # Durable per-owner composable-order rows: every field needed to rebuild a
 # DiscreteOrder without re-hitting the orderbook, so OwnerBackfill drains only
 # the delta newer than MAX(creationDate) per owner. Keyed by generator hash

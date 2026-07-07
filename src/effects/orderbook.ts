@@ -90,7 +90,9 @@ async function fetchOrderbook(
 
 // ─── Raw implementations (shared by the effects) ─────────────────────────────
 
-/** Fetch orders for an owner with pagination. See upstream fetchAccountOrders. */
+/** Fetch orders for an owner with pagination. See upstream fetchAccountOrders.
+ *  startOffset resumes a bounded drain from a prior firing; nextOffset in the
+ *  result is where the next call should resume when complete=false. */
 export async function fetchAccountOrdersRaw(
   apiBaseUrl: string,
   owner: string,
@@ -98,9 +100,10 @@ export async function fetchAccountOrdersRaw(
   signingScheme?: string,
   pageSize = PAGE_LIMIT,
   sinceCreationDate?: number,
-): Promise<{ orders: OrderbookOrder[]; complete: boolean }> {
+  startOffset = 0,
+): Promise<{ orders: OrderbookOrder[]; complete: boolean; nextOffset: number }> {
   const allOrders: OrderbookOrder[] = [];
-  let offset = 0;
+  let offset = startOffset;
   let pagesFetched = 0;
   // complete=false means pagination was cut short by an error (rate limit / timeout /
   // network) — the caller must NOT treat the result as the owner's full history.
@@ -124,9 +127,11 @@ export async function fetchAccountOrdersRaw(
       }
 
       pagesFetched++;
-      if (page.length < pageSize) { complete = true; break; } // last page
-      if (maxPages > 0 && pagesFetched >= maxPages) { complete = true; break; } // page cap reached
+      if (page.length < pageSize) { offset += page.length; complete = true; break; } // last page
       offset += page.length;
+      // Page cap reached with a full page: more history may remain. `complete`
+      // stays false so bounded drains resume from nextOffset next firing.
+      if (maxPages > 0 && pagesFetched >= maxPages) break;
     } catch (err) {
       if (err instanceof OrderbookUnavailableError) {
         log("error", "ob:unavailable", { endpoint: "ob:account", status: err.status, owner });
@@ -141,7 +146,7 @@ export async function fetchAccountOrdersRaw(
     }
   }
 
-  return { orders: allOrders, complete };
+  return { orders: allOrders, complete, nextOffset: offset };
 }
 
 /** Batch-fetch orders by UID (chunks of BATCH_SIZE fired in parallel). */
@@ -200,15 +205,16 @@ export const orderbookAccountOrders = createEffect(
       maxPages: S.number, // 0 = unlimited
       signingScheme: S.optional(S.string),
       pageSize: S.number,
-      since: S.optional(S.number), // Unix seconds cursor — incremental drain
+      since: S.optional(S.number), // Unix seconds cursor — incremental delta drain
+      offset: S.optional(S.number), // resume offset — bounded full-history drain
     }),
-    output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean }
+    output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
     cache: false, // statuses change over time
     rateLimit: { calls: 5, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
-    if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false });
+    if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false, nextOffset: input.offset ?? 0 });
     const result = await fetchAccountOrdersRaw(
       apiBaseUrl,
       input.owner,
@@ -216,6 +222,7 @@ export const orderbookAccountOrders = createEffect(
       input.signingScheme,
       input.pageSize,
       input.since,
+      input.offset ?? 0,
     );
     return JSON.stringify(result);
   },
