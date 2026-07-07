@@ -1,4 +1,4 @@
-import { GPv2Settlement } from "generated";
+import { indexer } from "envio";
 import { fetchOrderBookOrders } from "../effects/orderbook.js";
 import { checkAaveAdapter, AAVE_FACTORY_DEPLOY_BLOCK } from "../effects/rpc.js";
 import {
@@ -10,7 +10,7 @@ import {
 // Track owners we've already fetched OrderBook orders for in this session
 const fetchedOwners = new Set<string>();
 
-GPv2Settlement.Trade.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "GPv2Settlement", event: "Trade" }, async ({ event, context }) => {
   const owner = event.params.owner.toLowerCase();
   const chainId = event.chainId;
   const txHash = event.transaction.hash;
@@ -143,4 +143,5 @@ GPv2Settlement.Trade.handler(async ({ event, context }) => {
       );
     }
   }
-});
+},
+);

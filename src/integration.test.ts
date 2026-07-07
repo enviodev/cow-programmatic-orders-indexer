@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createTestIndexer } from "generated";
+import { createTestIndexer } from "envio";
 import { decodeSettleCalldata, extractOwnerFromOrderUid } from "./utils/settle-decoder.js";
 import type { Hex } from "viem";
 
