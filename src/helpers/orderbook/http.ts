@@ -1,0 +1,54 @@
+/**
+ * Context-aware orderbook HTTP wrappers — same signatures as the upstream
+ * orderbook/http.ts, routed through envio effects (src/effects/orderbook.ts)
+ * so calls are deduped during preload.
+ */
+
+import { type Hex } from "viem";
+import {
+  orderbookAccountOrders,
+  orderbookOrdersByUids,
+  OrderbookUnavailableError,
+} from "../../effects/orderbook.js";
+import { PAGE_LIMIT, type OrderbookOrder } from "./types.js";
+
+export { OrderbookUnavailableError };
+
+/** Fetch orders for an owner with pagination. maxPages limits how many pages are
+ *  fetched (0 = unlimited). sinceCreationDate (Unix seconds) enables the
+ *  incremental drain (see upstream docs). */
+export async function fetchAccountOrders(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  chainId: number,
+  owner: Hex,
+  maxPages = 0,
+  signingScheme?: string,
+  pageSize = PAGE_LIMIT,
+  sinceCreationDate?: number,
+): Promise<{ orders: OrderbookOrder[]; complete: boolean }> {
+  const json = await context.effect(orderbookAccountOrders, {
+    chainId,
+    owner,
+    maxPages,
+    signingScheme,
+    pageSize,
+    since: sinceCreationDate,
+  });
+  return JSON.parse(json) as { orders: OrderbookOrder[]; complete: boolean };
+}
+
+/** Batch-fetch orders by UID to refresh status of open orders. */
+export async function fetchOrdersByUids(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  chainId: number,
+  uids: string[],
+): Promise<OrderbookOrder[]> {
+  if (uids.length === 0) return [];
+  const json = await context.effect(orderbookOrdersByUids, {
+    chainId,
+    uidsJson: JSON.stringify(uids),
+  });
+  return JSON.parse(json) as OrderbookOrder[];
+}

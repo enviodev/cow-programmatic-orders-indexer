@@ -1,79 +1,239 @@
+/**
+ * CoW Orderbook API effects — all orderbook HTTP goes through these so envio
+ * can dedupe them during preload. Retry/backoff (429 Retry-After, 5xx
+ * exponential) is ported 1:1 from the upstream ponder indexer's orderbook/http.ts.
+ *
+ * Effects never throw: page/chunk failures degrade to partial results exactly
+ * like upstream (complete:false / missing UIDs), so callers retry naturally on
+ * a later block.
+ */
+
 import { createEffect, S } from "envio";
+import { ORDERBOOK_API_URLS } from "../data.js";
+import {
+  ORDERBOOK_HTTP_TIMEOUT_MS,
+  ORDERBOOK_MAX_RETRIES,
+  ORDERBOOK_RETRY_BASE_MS,
+  ORDERBOOK_RETRY_BUDGET_MS,
+  ORDERBOOK_RETRY_MAX_DELAY_MS,
+} from "../constants.js";
+import { fetchWithTimeout, TimeoutError } from "../helpers/withTimeout.js";
+import { log } from "../helpers/logger.js";
+import { BATCH_SIZE, PAGE_LIMIT, type OrderbookOrder } from "../helpers/orderbook/types.js";
 
-// ─── Chain → API URL mapping ───────────────────────────────────────────────
-
-const API_URLS: Record<number, string> = {
-  1: "https://api.cow.fi/mainnet",
-  100: "https://api.cow.fi/xdai",
-  42161: "https://api.cow.fi/arbitrum_one",
-  8453: "https://api.cow.fi/base",
-  11155111: "https://api.cow.fi/sepolia",
-};
-
-export interface OrderBookOrder {
-  uid: string;
-  owner?: string;
-  status?: string;
-  sellToken?: string;
-  buyToken?: string;
-  sellAmount?: string;
-  buyAmount?: string;
-  validTo?: number;
+/**
+ * The orderbook API refused to answer (HTTP 429 or 5xx) after bounded retries.
+ * Distinct from "the API has no such order" (a UID simply absent from a 2xx body).
+ */
+export class OrderbookUnavailableError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly endpoint: string,
+  ) {
+    super(`[COW:orderbook-unavailable] ${endpoint} responded ${status}`);
+    this.name = "OrderbookUnavailableError";
+  }
 }
 
-// ─── OrderBook API Effect (cached) ─────────────────────────────────────────
-// Fetches all orders for an owner from the CoW Protocol OrderBook API.
-// Uses cache: true so results persist across re-indexing runs.
-// Output is JSON-stringified to avoid PostgreSQL array serialization issues.
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export const fetchOrderBookOrders = createEffect(
+/** Parse an orderbook order's ISO creationDate into Unix seconds. */
+function orderCreationSeconds(order: OrderbookOrder): number {
+  return Math.floor(new Date(order.creationDate).getTime() / 1000);
+}
+
+/** Parse a `Retry-After` header (delta-seconds or HTTP-date) into milliseconds; null if absent/unparseable. */
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  return null;
+}
+
+/**
+ * `fetchWithTimeout` plus bounded retry/backoff for transient orderbook errors.
+ * On 429 it honors `Retry-After` (capped); on 5xx it uses exponential backoff.
+ * Throws OrderbookUnavailableError once retries/budget are exhausted.
+ */
+async function fetchOrderbook(
+  url: string,
+  init: RequestInit | undefined,
+  endpoint: string,
+): Promise<Response> {
+  let spent = 0;
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetchWithTimeout(url, init, ORDERBOOK_HTTP_TIMEOUT_MS, endpoint);
+    if (response.ok) return response;
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt >= ORDERBOOK_MAX_RETRIES) {
+      throw new OrderbookUnavailableError(response.status, endpoint);
+    }
+
+    const retryAfterMs =
+      response.status === 429 ? parseRetryAfter(response.headers.get("retry-after")) : null;
+    const backoffMs = ORDERBOOK_RETRY_BASE_MS * 2 ** attempt;
+    const delay = Math.min(retryAfterMs ?? backoffMs, ORDERBOOK_RETRY_MAX_DELAY_MS);
+
+    // Fail fast rather than linger past our budget.
+    if (spent + delay > ORDERBOOK_RETRY_BUDGET_MS) {
+      throw new OrderbookUnavailableError(response.status, endpoint);
+    }
+
+    log("warn", "ob:retry", { endpoint, status: response.status, attempt: attempt + 1, delayMs: delay, retryAfterMs });
+    await sleep(delay);
+    spent += delay;
+  }
+}
+
+// ─── Raw implementations (shared by the effects) ─────────────────────────────
+
+/** Fetch orders for an owner with pagination. See upstream fetchAccountOrders. */
+export async function fetchAccountOrdersRaw(
+  apiBaseUrl: string,
+  owner: string,
+  maxPages = 0,
+  signingScheme?: string,
+  pageSize = PAGE_LIMIT,
+  sinceCreationDate?: number,
+): Promise<{ orders: OrderbookOrder[]; complete: boolean }> {
+  const allOrders: OrderbookOrder[] = [];
+  let offset = 0;
+  let pagesFetched = 0;
+  // complete=false means pagination was cut short by an error (rate limit / timeout /
+  // network) — the caller must NOT treat the result as the owner's full history.
+  let complete = false;
+
+  while (true) {
+    const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
+    if (signingScheme) params.set("signingScheme", signingScheme);
+    const url = `${apiBaseUrl}/api/v1/account/${owner}/orders?${params.toString()}`;
+    try {
+      const response = await fetchOrderbook(url, undefined, "ob:account");
+      const page = (await response.json()) as OrderbookOrder[];
+
+      if (sinceCreationDate !== undefined) {
+        // DESC order → orders at/after the cursor form a prefix of the page.
+        const fresh = page.filter((o) => orderCreationSeconds(o) >= sinceCreationDate);
+        allOrders.push(...fresh);
+        if (fresh.length < page.length) { complete = true; break; } // crossed the cursor — older orders already cached
+      } else {
+        allOrders.push(...page);
+      }
+
+      pagesFetched++;
+      if (page.length < pageSize) { complete = true; break; } // last page
+      if (maxPages > 0 && pagesFetched >= maxPages) { complete = true; break; } // page cap reached
+      offset += page.length;
+    } catch (err) {
+      if (err instanceof OrderbookUnavailableError) {
+        log("error", "ob:unavailable", { endpoint: "ob:account", status: err.status, owner });
+        break;
+      }
+      if (err instanceof TimeoutError) {
+        log("warn", "ob:accountTimeout", { owner, offset, after: ORDERBOOK_HTTP_TIMEOUT_MS });
+        break;
+      }
+      log("warn", "ob:accountFetchFailed", { owner, err: String(err) });
+      break;
+    }
+  }
+
+  return { orders: allOrders, complete };
+}
+
+/** Batch-fetch orders by UID (chunks of BATCH_SIZE fired in parallel). */
+export async function fetchOrdersByUidsRaw(
+  apiBaseUrl: string,
+  uids: string[],
+): Promise<OrderbookOrder[]> {
+  if (uids.length === 0) return [];
+
+  const url = `${apiBaseUrl}/api/v1/orders/by_uids`;
+  const chunks: string[][] = [];
+  for (let i = 0; i < uids.length; i += BATCH_SIZE) {
+    chunks.push(uids.slice(i, i + BATCH_SIZE));
+  }
+
+  const chunkResults = await Promise.all(
+    chunks.map(async (chunk, idx) => {
+      try {
+        const response = await fetchOrderbook(
+          url,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(chunk),
+          },
+          "ob:byUids",
+        );
+        const raw = (await response.json()) as { order: OrderbookOrder }[];
+        return raw.flatMap((item) => (item?.order != null ? [item.order] : []));
+      } catch (err) {
+        if (err instanceof OrderbookUnavailableError) {
+          log("error", "ob:unavailable", { endpoint: "ob:byUids", status: err.status, uids: chunk.length, offset: idx * BATCH_SIZE });
+          return [] as OrderbookOrder[];
+        }
+        if (err instanceof TimeoutError) {
+          log("warn", "ob:batchFetchTimeout", { uids: chunk.length, offset: idx * BATCH_SIZE, after: ORDERBOOK_HTTP_TIMEOUT_MS });
+          return [] as OrderbookOrder[];
+        }
+        log("warn", "ob:batchFetchFailed", { err: String(err), offset: idx * BATCH_SIZE });
+        return [] as OrderbookOrder[];
+      }
+    }),
+  );
+
+  return chunkResults.flat();
+}
+
+// ─── Effects ─────────────────────────────────────────────────────────────────
+
+export const orderbookAccountOrders = createEffect(
   {
-    name: "fetchOrderBookOrders",
-    input: { owner: S.string, chainId: S.number },
-    output: S.string,
+    name: "orderbookAccountOrders",
+    input: S.schema({
+      chainId: S.number,
+      owner: S.string,
+      maxPages: S.number, // 0 = unlimited
+      signingScheme: S.optional(S.string),
+      pageSize: S.number,
+      since: S.optional(S.number), // Unix seconds cursor — incremental drain
+    }),
+    output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean }
+    cache: false, // statuses change over time
     rateLimit: { calls: 5, per: "second" as const },
-    cache: true,
   },
   async ({ input }): Promise<string> => {
-    const baseUrl = API_URLS[input.chainId];
-    if (!baseUrl) return "[]";
-
-    try {
-      const res = await fetch(
-        `${baseUrl}/api/v1/account/${input.owner}/orders`,
-      );
-      if (!res.ok) return "[]";
-      const data = await res.json();
-      return JSON.stringify(data);
-    } catch {
-      return "[]";
-    }
+    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+    if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false });
+    const result = await fetchAccountOrdersRaw(
+      apiBaseUrl,
+      input.owner,
+      input.maxPages,
+      input.signingScheme,
+      input.pageSize,
+      input.since,
+    );
+    return JSON.stringify(result);
   },
 );
 
-// ─── Single Order Status Effect (cached) ───────────────────────────────────
-
-export const fetchOrderStatus = createEffect(
+export const orderbookOrdersByUids = createEffect(
   {
-    name: "fetchOrderStatus",
-    input: { orderUid: S.string, chainId: S.number },
-    output: S.union([S.string, null]),
-    rateLimit: { calls: 5, per: "second" as const },
-    cache: true,
+    name: "orderbookOrdersByUids",
+    input: S.schema({ chainId: S.number, uidsJson: S.string }),
+    output: S.string, // JSON OrderbookOrder[]
+    cache: false, // statuses change over time; terminal results are cached in OrderUidCache
+    rateLimit: { calls: 10, per: "second" as const },
   },
-  async ({ input }): Promise<string | null> => {
-    const baseUrl = API_URLS[input.chainId];
-    if (!baseUrl) return null;
-
-    try {
-      const res = await fetch(
-        `${baseUrl}/api/v1/orders/${input.orderUid}`,
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      return JSON.stringify(data);
-    } catch {
-      return null;
-    }
+  async ({ input }): Promise<string> => {
+    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+    if (!apiBaseUrl) return "[]";
+    const uids = JSON.parse(input.uidsJson) as string[];
+    const orders = await fetchOrdersByUidsRaw(apiBaseUrl, uids);
+    return JSON.stringify(orders);
   },
 );

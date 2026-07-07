@@ -1,123 +1,191 @@
+/**
+ * ConditionalOrderCreated handler — indexes generators and triggers UID
+ * pre-computation for deterministic order types. Ported from the upstream
+ * ponder indexer's composableCow.ts.
+ *
+ * Upstream registers the same logic twice (ComposableCow historical +
+ * ComposableCowLive at startBlock "latest") to distinguish backfill from live
+ * creations; here one registration covers both and `isLive` is derived from
+ * `context.chain.isRealtime`.
+ *
+ * For deterministic types (TWAP, StopLoss, CirclesBackingOrder), precomputeAndDiscover
+ * computes all UIDs, fetches their status from the API, upserts discrete orders, and marks
+ * allCandidatesKnown=true. Non-deterministic types are left for the OrderDiscoveryPoller
+ * block handler to discover at live sync.
+ *
+ * KNOWN LIMITATION — Off-chain cancellation gap:
+ *   Orders cancelled via the CoW Orderbook API's DELETE endpoint (off-chain
+ *   soft cancel) are NOT detected after the initial fetch. The standard
+ *   on-chain cancellation path is detected via SingleOrderNotAuthed
+ *   (OrderDiscoveryPoller) and the CancellationWatcher.
+ */
+
 import { indexer } from "envio";
 import { encodeAbiParameters, keccak256, type Hex } from "viem";
-import { getOrderTypeFromHandler } from "../utils/order-types.js";
+import { getOrderTypeFromHandler, isNonDeterministic, type OrderType } from "../utils/order-types.js";
 import { decodeStaticInput } from "../decoders/index.js";
-import { conditionalOrderOwners } from "../utils/owner-cache.js";
+import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
+import { circlesImmutables } from "../effects/rpc.js";
+import { log } from "../helpers/logger.js";
 
-// ─── ConditionalOrderCreated ────────────────────────────────────────────────
+// ─── Shared helper — generator insert logic ─────────────────────────────────
 
-indexer.onEvent(
-  { contract: "ComposableCoW", event: "ConditionalOrderCreated" },
-  async ({ event, context }) => {
-    const owner = event.params.owner.toLowerCase();
-    const {
-      handler: handlerAddr,
-      salt,
-      staticInput,
-    } = event.params.params;
-    const handler = handlerAddr.toLowerCase();
+async function insertGenerator(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  event: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  // True when this generator is created during live sync. Live generators have
+  // no pre-creation history and are owned by the realtime poller from birth, so
+  // they never need an OwnerBackfill drain.
+  isLive: boolean,
+): Promise<{
+  generatorId: string;
+  ownerAddress: Hex;
+  chainId: number;
+  decodedParams: Record<string, string> | null;
+  orderType: OrderType;
+}> {
+  const { owner, params } = event.params;
+  const { handler, salt, staticInput } = params;
 
-    // Compute deterministic order hash: keccak256(abi.encode(params))
-    const encoded = encodeAbiParameters(
-      [
-        {
-          type: "tuple",
-          components: [
-            { name: "handler", type: "address" },
-            { name: "salt", type: "bytes32" },
-            { name: "staticInput", type: "bytes" },
-          ],
-        },
-      ],
-      [{ handler: handlerAddr, salt: salt as Hex, staticInput: staticInput as Hex }],
-    );
-    const hash = keccak256(encoded);
+  const encoded = encodeAbiParameters(
+    [
+      {
+        type: "tuple",
+        components: [
+          { name: "handler", type: "address" },
+          { name: "salt", type: "bytes32" },
+          { name: "staticInput", type: "bytes" },
+        ],
+      },
+    ],
+    [{ handler: handler as Hex, salt: salt as Hex, staticInput: staticInput as Hex }],
+  );
+  const hash = keccak256(encoded);
 
-    const chainId = event.chainId;
-    const orderType = getOrderTypeFromHandler(handler, chainId);
-    const orderId = `${hash}-${chainId}`;
+  const ownerAddress = owner.toLowerCase() as `0x${string}`;
+  const chainId = event.chainId as number;
+  const generatorId = `${chainId}_${event.block.number}_${event.logIndex}`;
+  const orderType = getOrderTypeFromHandler(handler, chainId);
 
-    // Decode staticInput based on handler type
-    let decodedParams: object | undefined = undefined;
-    let decodeError: string | undefined = undefined;
+  if (orderType === "Unknown") {
+    log("warn", "composableCow:unknownHandler", { handler, chainId, event: generatorId });
+  } else {
+    log("info", "composableCow:created", { event: generatorId, chainId, orderType, block: String(event.block.number) });
+  }
 
-    if (orderType !== "Unknown") {
-      try {
-        const decoded = decodeStaticInput(orderType, staticInput as Hex);
-        if (decoded) {
-          decodedParams = JSON.parse(
+  // Decode staticInput; for CirclesBackingOrder, also merge in handler immutables.
+  let decodedParams: Record<string, string> | null = null;
+  let decodeError: string | null = null;
+
+  if (orderType !== "Unknown") {
+    try {
+      const decoded = (decodeStaticInput(orderType, staticInput as Hex) ?? null) as
+        | Record<string, unknown>
+        | null;
+      // Resolve t0=0: the contract uses block.timestamp when staticInput has t0=0.
+      // Store the resolved value so precompute always has the real start time.
+      if (
+        decoded &&
+        orderType === "TWAP" &&
+        BigInt((decoded.t0 as bigint) ?? 0n) === 0n
+      ) {
+        decoded.t0 = BigInt(event.block.timestamp);
+      }
+      decodedParams = decoded
+        ? (JSON.parse(
             JSON.stringify(decoded, (_key, value) =>
               typeof value === "bigint" ? value.toString() : value,
             ),
-          );
+          ) as Record<string, string>)
+        : null;
+
+      if (orderType === "CirclesBackingOrder" && decodedParams) {
+        const immutablesJson = await context.effect(circlesImmutables, {
+          chainId,
+          handler: handler.toLowerCase(),
+        });
+        if (immutablesJson) {
+          const { sellToken, sellAmount } = JSON.parse(immutablesJson) as {
+            sellToken: string;
+            sellAmount: string;
+          };
+          decodedParams = { ...decodedParams, sellToken, sellAmount };
         }
-      } catch (err) {
-        decodeError = "invalid_static_input";
-        context.log.warn(
-          `Decode failed for order ${orderId} type=${orderType}: ${err}`,
-        );
       }
+    } catch (err) {
+      log("warn", "composableCow:decodeFailed", { event: generatorId, orderType, err: String(err) });
+      decodedParams = null;
+      decodeError = "invalid_static_input";
     }
+  }
 
-    // M2: Resolve proxy/adapter owner if available (COWShed or Aave adapter)
-    let realOwner: string | undefined = undefined;
-    const mapping = await context.OwnerMapping.get(`${owner}-${chainId}`);
-    if (mapping) {
-      realOwner = mapping.owner;
-    }
+  // Resolve EOA: look up OwnerMapping in case owner is a known proxy (CoWShed).
+  // For Aave adapters the mapping won't exist yet; the settlement handler backfills later.
+  const mapping = await context.OwnerMapping.get(`${chainId}_${ownerAddress}`);
+  const resolvedOwner = mapping ? mapping.owner : ownerAddress;
+  const ownerAddressType = mapping ? mapping.addressType : undefined;
 
-    context.ConditionalOrder.set({
-      id: orderId,
+  // Upsert transaction row (idempotent — multiple events may share a tx)
+  context.Transaction.set({
+    id: `${chainId}_${event.transaction.hash}`,
+    hash: event.transaction.hash,
+    chainId,
+    blockNumber: BigInt(event.block.number),
+    blockTimestamp: BigInt(event.block.timestamp),
+  });
+
+  // Insert-only (upstream onConflictDoNothing): a replay must not reset flags
+  // like historyBackfilled that other handlers may have flipped.
+  const existing = await context.ConditionalOrderGenerator.get(generatorId);
+  if (!existing) {
+    context.ConditionalOrderGenerator.set({
+      id: generatorId,
       chainId,
-      owner,
-      handler,
+      owner: ownerAddress,
+      resolvedOwner,
+      ownerAddressType,
+      handler: handler.toLowerCase(),
       salt,
       staticInput,
       hash,
       orderType,
       status: "Active",
-      blockNumber: event.block.number,
-      blockTimestamp: BigInt(event.block.timestamp),
-      transactionHash: event.transaction.hash,
-      createdBy: event.transaction.from?.toLowerCase() ?? "",
       decodedParams,
-      decodeError,
-      realOwner,
+      decodeError: decodeError ?? undefined,
+      txHash: event.transaction.hash,
+      allCandidatesKnown: false,
+      nextCheckBlock: BigInt(event.block.number),
+      lastCheckBlock: undefined,
+      lastPollResult: undefined,
+      nextCheckTimestamp: undefined,
+      consecutiveTryNextBlock: 0,
+      // Only non-deterministic generators created during historical backfill need an
+      // OwnerBackfill drain. Deterministic types are fully handled by precompute at
+      // creation, and live-created generators are owned by the realtime poller.
+      historyBackfilled: isLive || !isNonDeterministic(orderType),
     });
+  }
 
-    // Cache this owner so Trade handler can skip DB lookups for non-programmatic trades
-    conditionalOrderOwners.set(`${owner}-${chainId}`, orderId);
-  },
-);
+  return { generatorId, ownerAddress, chainId, decodedParams, orderType };
+}
 
-// ─── MerkleRootSet ──────────────────────────────────────────────────────────
+// ─── Handler ─────────────────────────────────────────────────────────────────
 
 indexer.onEvent(
-  { contract: "ComposableCoW", event: "MerkleRootSet" },
+  { contract: "ComposableCoW", event: "ConditionalOrderCreated" },
   async ({ event, context }) => {
-    const owner = event.params.owner.toLowerCase();
-    const chainId = event.chainId;
-    const merkleId = `${owner}-${chainId}`;
+    const isLive = context.chain.isRealtime;
+    const { generatorId, ownerAddress, chainId, decodedParams, orderType } =
+      await insertGenerator(event, context, isLive);
 
-    const { location, data } = event.params.proof;
-
-    context.MerkleRoot.set({
-      id: merkleId,
-      chainId,
-      owner,
-      root: event.params.root,
-      proofLocation: Number(location),
-      proofData: data,
-      blockNumber: event.block.number,
-      blockTimestamp: BigInt(event.block.timestamp),
-      transactionHash: event.transaction.hash,
-    });
-
-    // If proof location is LOG (1), the proof data contains encoded conditional orders.
-    if (Number(location) === 1) {
-      context.log.info(
-        `MerkleRootSet with LOG proof for owner=${owner} on chain=${chainId}, root=${event.params.root}`,
-      );
-    }
+    // Pre-compute UIDs for deterministic order types (TWAP, StopLoss, CirclesBackingOrder).
+    // Fetches status from API by UID, upserts discrete orders, and
+    // deactivates the generator if all orders are already terminal.
+    await precomputeAndDiscover(
+      context, chainId, generatorId, ownerAddress, orderType, decodedParams,
+      BigInt(event.block.timestamp),
+    );
   },
 );

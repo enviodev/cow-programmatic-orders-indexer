@@ -1,43 +1,38 @@
-import { indexer } from "envio";
-import { resolvedOwners } from "../utils/owner-cache.js";
+/**
+ * COWShedBuilt handler — maps proxy address → EOA owner in OwnerMapping.
+ * Ported 1:1 from the upstream ponder indexer's cowshed.ts.
+ */
 
-// ─── COWShedBuilt ───────────────────────────────────────────────────────────
-// Emitted when a COWShed proxy is deployed for an EOA.
-// Maps: proxy address → EOA owner in OwnerMapping.
+import { indexer } from "envio";
 
 indexer.onEvent(
   { contract: "COWShedFactory", event: "COWShedBuilt" },
   async ({ event, context }) => {
-    const proxyAddress = event.params.shed.toLowerCase();
-    const eoaOwner = event.params.user.toLowerCase();
+    const { user, shed } = event.params;
     const chainId = event.chainId;
+    const proxyAddress = shed.toLowerCase();
 
-    context.OwnerMapping.set({
-      id: `${proxyAddress}-${chainId}`,
-      address: proxyAddress,
-      owner: eoaOwner,
+    context.Transaction.set({
+      id: `${chainId}_${event.transaction.hash}`,
+      hash: event.transaction.hash,
       chainId,
-      addressType: "CowShedProxy",
-      resolutionDepth: 0, // direct mapping, no hops
-      blockNumber: event.block.number,
-      transactionHash: event.transaction.hash,
+      blockNumber: BigInt(event.block.number),
+      blockTimestamp: BigInt(event.block.timestamp),
     });
 
-    // Cache so Trade handler can skip DB lookups for non-proxy owners
-    resolvedOwners.set(`${proxyAddress}-${chainId}`, eoaOwner);
-
-    // Retroactively update any ConditionalOrders owned by this proxy
-    // that were indexed before the proxy deployment was seen.
-    // This handles the case where ComposableCoW events arrive before
-    // the COWShedBuilt event (cross-contract ordering).
-    const existingOrders = await context.ConditionalOrder.getWhere({
-      owner: { _eq: proxyAddress },
-    });
-
-    for (const order of existingOrders) {
-      context.ConditionalOrder.set({
-        ...order,
-        realOwner: eoaOwner,
+    // Insert-only (upstream onConflictDoNothing).
+    const id = `${chainId}_${proxyAddress}`;
+    const existing = await context.OwnerMapping.get(id);
+    if (!existing) {
+      context.OwnerMapping.set({
+        id,
+        address: proxyAddress,
+        chainId,
+        owner: user.toLowerCase(),
+        addressType: "cowshed_proxy",
+        txHash: event.transaction.hash,
+        blockNumber: BigInt(event.block.number),
+        resolutionDepth: 0,
       });
     }
   },

@@ -1,147 +1,109 @@
+/**
+ * GPv2Settlement:Settlement handler — inline Aave flash-loan adapter discovery.
+ * Ported from the upstream ponder indexer's settlement.ts.
+ *
+ * Events are filtered to solver = the Aave V3 FlashLoanRouter (per chain), so
+ * only flash-loan settlements are processed. The receipt scan (Trade logs →
+ * getCode + FACTORY() + owner()) runs in the cached scanAaveSettlement effect;
+ * this handler persists the confirmed candidates:
+ *   - FlashLoanOrder row (executed-only; enriched later from the orderbook)
+ *   - OwnerMapping (adapter → EOA, addressType flash_loan_helper) when owner() resolved
+ */
+
 import { indexer } from "envio";
-import { fetchOrderBookOrders } from "../effects/orderbook.js";
-import { checkAaveAdapter, AAVE_FACTORY_DEPLOY_BLOCK } from "../effects/rpc.js";
-import {
-  conditionalOrderOwners,
-  resolvedOwners,
-  checkedNonAdapters,
-} from "../utils/owner-cache.js";
+import { AAVE_V3_ROUTER_ADDRESSES } from "../data.js";
+import { scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
+import { log } from "../helpers/logger.js";
 
-// Track owners we've already fetched OrderBook orders for in this session
-const fetchedOwners = new Set<string>();
+indexer.onEvent(
+  {
+    contract: "GPv2Settlement",
+    event: "Settlement",
+    where: ({ chain }) => {
+      const router = AAVE_V3_ROUTER_ADDRESSES[chain.id];
+      if (!router) return false; // no flash-loan infra on this chain
+      return { params: { solver: router } };
+    },
+  },
+  async ({ event, context }) => {
+    if (process.env.DISABLE_SETTLEMENT_FACTORY_CHECK === "true") return;
 
-indexer.onEvent({ contract: "GPv2Settlement", event: "Trade" }, async ({ event, context }) => {
-  const owner = event.params.owner.toLowerCase();
-  const chainId = event.chainId;
-  const txHash = event.transaction.hash;
-  const tradeId = `${txHash}-${event.logIndex}`;
-  const ownerKey = `${owner}-${chainId}`;
+    const chainId = event.chainId;
+    const txHash = event.transaction.hash;
 
-  // ─── Link to ConditionalOrder (cache-gated) ─────────────────────
-  // Only query DB if this owner was seen in a ConditionalOrderCreated event.
-  // This skips the expensive getWhere for 99%+ of trades.
-  let conditionalOrder_id: string | undefined = undefined;
+    const candidatesJson = await context.effect(scanAaveSettlement, { chainId, txHash });
+    const candidates = JSON.parse(candidatesJson) as AaveSettlementCandidate[];
+    if (candidates.length === 0) return;
 
-  if (conditionalOrderOwners.has(ownerKey)) {
-    conditionalOrder_id = conditionalOrderOwners.get(ownerKey);
-  }
-
-  // ─── Resolve proxy/adapter owner ────────────────────────────────
-  // Check for Aave V3 flash loan adapters, but only for trades after the
-  // factory was deployed on this chain. Adapters can't exist before then,
-  // so the block gate skips 99%+ of historical trades with zero RPC cost.
-  let realOwner: string | undefined = undefined;
-
-  const factoryDeployBlock = AAVE_FACTORY_DEPLOY_BLOCK[chainId];
-
-  if (resolvedOwners.has(ownerKey)) {
-    // Already resolved (COWShed proxy or previously detected Aave adapter)
-    realOwner = resolvedOwners.get(ownerKey);
-  } else if (
-    factoryDeployBlock &&
-    event.block.number >= factoryDeployBlock &&
-    !checkedNonAdapters.has(ownerKey)
-  ) {
-    // Trade is after factory deployment and address hasn't been checked yet
-    const result = await context.effect(checkAaveAdapter, {
-      address: owner,
+    context.Transaction.set({
+      id: `${chainId}_${txHash}`,
+      hash: txHash,
       chainId,
+      blockNumber: BigInt(event.block.number),
+      blockTimestamp: BigInt(event.block.timestamp),
     });
 
-    if (result) {
-      const parsed = JSON.parse(result) as { owner: string };
-      realOwner = parsed.owner;
-      resolvedOwners.set(ownerKey, realOwner);
-
-      // Persist the mapping
-      context.OwnerMapping.set({
-        id: `${owner}-${chainId}`,
-        address: owner,
-        owner: realOwner,
-        chainId,
-        addressType: "FlashLoanHelper",
-        resolutionDepth: 1, // one hop via owner()
-        blockNumber: event.block.number,
-        transactionHash: txHash,
-      });
-
-      // Retroactively update ConditionalOrders owned by this adapter
-      const existingOrders = await context.ConditionalOrder.getWhere({
-        owner: { _eq: owner },
-      });
-      for (const order of existingOrders) {
-        context.ConditionalOrder.set({
-          ...order,
-          realOwner,
+    for (const c of candidates) {
+      // The order row is always created (insert-only, idempotent for replays),
+      // enriched=false so FlashLoanOrderEnricher picks it up.
+      const orderId = `${chainId}_${c.orderUid}`;
+      const existingOrder = await context.FlashLoanOrder.get(orderId);
+      if (!existingOrder) {
+        context.FlashLoanOrder.set({
+          id: orderId,
+          orderUid: c.orderUid,
+          chainId,
+          adapter: c.adapter,
+          sellToken: c.sellToken,
+          buyToken: c.buyToken,
+          executedSellAmount: c.sellAmount,
+          executedBuyAmount: c.buyAmount,
+          feeAmount: c.feeAmount,
+          txHash,
+          blockNumber: BigInt(event.block.number),
+          blockTimestamp: BigInt(event.block.timestamp),
+          validTo: BigInt(c.validTo),
+          owner: c.owner ?? undefined,
+          receiver: undefined,
+          kind: undefined,
+          sellAmountIntended: undefined,
+          buyAmountIntended: undefined,
+          source: "aave",
+          type: c.type ?? undefined,
+          enriched: false,
+          enrichedAt: undefined,
+          enrichmentAttempts: 0,
         });
       }
 
-      if (!context.isPreload) {
-        context.log.info(
-          `Aave adapter detected: ${owner} → EOA ${realOwner} (chain=${chainId})`,
-        );
-      }
-    } else {
-      // Not an adapter — cache to avoid future RPC calls
-      checkedNonAdapters.add(ownerKey);
-    }
-  }
-
-  // ─── Create Trade entity ──────────────────────────────────────────
-  context.Trade.set({
-    id: tradeId,
-    chainId,
-    owner,
-    sellToken: event.params.sellToken.toLowerCase(),
-    buyToken: event.params.buyToken.toLowerCase(),
-    sellAmount: event.params.sellAmount,
-    buyAmount: event.params.buyAmount,
-    feeAmount: event.params.feeAmount,
-    orderUid: event.params.orderUid,
-    blockNumber: event.block.number,
-    blockTimestamp: BigInt(event.block.timestamp),
-    transactionHash: txHash,
-    conditionalOrder_id: conditionalOrder_id,
-    realOwner,
-  });
-
-  // ─── OrderBook API Integration ────────────────────────────────────
-  if (conditionalOrder_id && !fetchedOwners.has(ownerKey)) {
-    fetchedOwners.add(ownerKey);
-    try {
-      const orderBookJson = await context.effect(fetchOrderBookOrders, {
-        owner,
-        chainId,
-      });
-
-      const orderBookOrders = JSON.parse(orderBookJson) as Array<
-        Record<string, unknown>
-      >;
-      if (Array.isArray(orderBookOrders)) {
-        for (const apiOrder of orderBookOrders) {
-          if (!apiOrder.uid) continue;
-
-          context.OrderBookOrder.set({
-            id: apiOrder.uid as string,
-            orderUid: apiOrder.uid as string,
-            owner: ((apiOrder.owner as string) ?? owner).toLowerCase(),
-            status: (apiOrder.status as string) ?? "unknown",
-            sellToken: ((apiOrder.sellToken as string) ?? "").toLowerCase(),
-            buyToken: ((apiOrder.buyToken as string) ?? "").toLowerCase(),
-            sellAmount: BigInt((apiOrder.sellAmount as string) ?? "0"),
-            buyAmount: BigInt((apiOrder.buyAmount as string) ?? "0"),
-            validTo: BigInt(Number(apiOrder.validTo ?? 0)),
+      // The mapping is written whenever the EOA resolved (insert-only).
+      if (c.owner) {
+        const mappingId = `${chainId}_${c.adapter}`;
+        const existingMapping = await context.OwnerMapping.get(mappingId);
+        if (!existingMapping) {
+          context.OwnerMapping.set({
+            id: mappingId,
+            address: c.adapter,
             chainId,
-            fetchedAt: BigInt(event.block.timestamp),
-            conditionalOrder_id: conditionalOrder_id,
+            owner: c.owner,
+            addressType: "flash_loan_helper",
+            txHash,
+            blockNumber: BigInt(event.block.number),
+            resolutionDepth: 1,
           });
         }
       }
-    } catch (err) {
-      context.log.warn(
-        `OrderBook API fetch failed for owner=${owner} chain=${chainId}: ${err}`,
-      );
+
+      if (!context.isPreload) {
+        log("info", "SettlementResolver:aave_adapter_mapped", {
+          chainId,
+          adapter: c.adapter,
+          eoa: c.owner,
+          orderUid: c.orderUid,
+          type: c.type,
+          block: String(event.block.number),
+        });
+      }
     }
-  }
-},
+  },
 );

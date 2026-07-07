@@ -11,6 +11,10 @@ export const PollResultErrorsAbi = [
   { type: "error", name: "PollTryAtEpoch",   inputs: [{ name: "timestamp", type: "uint256" }, { name: "reason", type: "string" }] },
   { type: "error", name: "PollNever",        inputs: [{ name: "reason", type: "string" }] },
   { type: "error", name: "OrderNotValid",    inputs: [{ name: "reason", type: "string" }] },
+  // ComposableCoW error (not IConditionalOrder): thrown by getTradeableOrderWithSignature
+  // when the order was removed on-chain via remove(). Included here so viem can decode it
+  // and parsePollError can map it to the "cancelled" PollResult.
+  { type: "error", name: "SingleOrderNotAuthed", inputs: [] },
 ] as const;
 
 /**
