@@ -1,104 +1,212 @@
+# Schema mirroring the upstream ponder indexer's schema/tables.ts (1:1 port).
+# Composite PKs (chainId, x) become id = "<chainId>_<x>". Ponder's per-deployment
+# event.id becomes "<chainId>_<blockNumber>_<logIndex>".
+
 enum OrderType {
   TWAP
   StopLoss
   PerpetualSwap
   GoodAfterTime
   TradeAboveThreshold
+  CirclesBackingOrder
+  SwapOrderHandler
+  ERC4626CowSwapFeeBurner
+  CurveCowSwapBurner
+  BalancerCowSwapFeeBurner
+  CowAmmConstantProduct
   Unknown
 }
 
 enum OrderStatus {
   Active
   Cancelled
+  Completed
 }
 
 enum AddressType {
-  CowShedProxy
-  FlashLoanHelper
+  cowshed_proxy
+  flash_loan_helper
 }
 
-# ─── M1: Composable CoW Orders ──────────────────────────────────────────────
+# NOTE: lowercase "open" is a reserved keyword in envio schemas, so these are
+# capitalized. Handlers map orderbook API statuses (lowercase) via
+# toDiscreteStatus() in src/helpers/orderbook/types.ts.
+enum DiscreteOrderStatus {
+  Open
+  Fulfilled
+  Unfilled
+  Expired
+  Cancelled
+}
 
-type ConditionalOrder {
-  id: ID! # keccak256(abi.encode(params)) + "-" + chainId
+# Integration an order originated from. Currently always "aave" (Aave V3).
+enum FlashLoanOrderSource {
+  aave
+}
+
+# Adapter operation, derived from the EIP-1167 implementation address.
+enum FlashLoanOrderType {
+  RepayWithCollateral
+  CollateralSwap
+  DebtSwap
+}
+
+# CoW order kind, from the orderbook.
+enum FlashLoanOrderKind {
+  sell
+  buy
+}
+
+# ─── Tables ──────────────────────────────────────────────────────────────────
+
+type Transaction {
+  id: ID! # chainId + "_" + hash
+  hash: String!
   chainId: Int!
-  owner: String! @index
-  handler: String! @index
-  salt: String!
-  staticInput: String!
-  hash: String! @index
-  orderType: OrderType!
+  blockNumber: BigInt! @index
+  blockTimestamp: BigInt!
+}
+
+type ConditionalOrderGenerator {
+  id: ID! # chainId + "_" + blockNumber + "_" + logIndex (upstream: ponder event.id)
+  chainId: Int! @index
+  owner: String! @index # indexed address from event
+  resolvedOwner: String @index # mapped EOA at insert time; falls back to owner if no mapping exists yet
+  ownerAddressType: AddressType # null = direct EOA or Aave adapter not yet discovered
+  handler: String! @index # IConditionalOrder handler address
+  salt: String! # bytes32
+  staticInput: String! # encoded handler params
+  hash: String! @index # keccak256(abi.encode(params))
+  orderType: OrderType! @index
   status: OrderStatus! @index
-  blockNumber: Int!
-  blockTimestamp: BigInt!
-  transactionHash: String!
-  createdBy: String! # transaction.from
-  decodedParams: Json
-  decodeError: String
-  # M2: Resolved EOA owner (if owner is a proxy)
-  realOwner: String @index
-  # M3: Trades linked to this conditional order
-  trades: [Trade!]! @derivedFrom(field: "conditionalOrder")
+  decodedParams: Json # null if unknown type or decode failed
+  decodeError: String # "invalid_static_input" | null
+  txHash: String! # FK -> Transaction.hash
+  allCandidatesKnown: Boolean! @index
+  nextCheckBlock: BigInt @index # block handler scheduling
+  lastCheckBlock: BigInt
+  lastPollResult: String
+  nextCheckTimestamp: BigInt @index # for PollTryAtEpoch — store epoch directly
+  consecutiveTryNextBlock: Int! # backoff counter for stuck generators
+  historyBackfilled: Boolean! @index # OwnerBackfill has drained this generator's full /account history
+  discreteOrders: [DiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
+  candidateDiscreteOrders: [CandidateDiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
 }
 
-type MerkleRoot {
-  id: ID! # owner + "-" + chainId
-  chainId: Int!
-  owner: String! @index
-  root: String!
-  proofLocation: Int!
-  proofData: String!
-  blockNumber: Int!
-  blockTimestamp: BigInt!
-  transactionHash: String!
+type DiscreteOrder {
+  id: ID! # chainId + "_" + orderUid
+  orderUid: String! @index
+  chainId: Int! @index
+  conditionalOrderGenerator: ConditionalOrderGenerator!
+  status: DiscreteOrderStatus! @index
+  sellAmount: String! # uint256 as decimal string
+  buyAmount: String!
+  feeAmount: String!
+  validTo: BigInt @index # uint32 Unix timestamp — from API or getTradeableOrderWithSignature
+  creationDate: BigInt! # block timestamp (seconds)
+  executedSellAmount: String # actual executed amount (from API, post-settlement)
+  executedBuyAmount: String # actual executed amount (from API, post-settlement)
+  promotedAt: BigInt # block timestamp when CandidateConfirmer promoted from candidate; null = created directly
 }
 
-# ─── M2: Owner Mapping (COWShed + Aave adapter proxy resolution) ───────────
+type CandidateDiscreteOrder {
+  id: ID! # chainId + "_" + orderUid
+  orderUid: String! @index
+  chainId: Int! @index
+  conditionalOrderGenerator: ConditionalOrderGenerator!
+  sellAmount: String!
+  buyAmount: String!
+  feeAmount: String!
+  validTo: BigInt @index
+  creationDate: BigInt!
+  possibleValidAfterTimestamp: BigInt # TWAP: t0 + partIndex * t — skip API calls before this
+}
 
 type OwnerMapping {
-  id: ID! # address + "-" + chainId
-  address: String! @index # proxy/adapter contract address
-  owner: String! @index # resolved EOA owner
-  chainId: Int!
+  id: ID! # chainId + "_" + address
+  address: String! @index # the proxy or helper contract address
+  chainId: Int! @index
+  owner: String! @index # fully resolved owner (never an intermediate proxy)
   addressType: AddressType!
-  resolutionDepth: Int! # 0 = direct (COWShed), 1 = one hop (Aave via owner())
-  blockNumber: Int!
-  transactionHash: String!
+  txHash: String! # transaction where this mapping was discovered
+  blockNumber: BigInt!
+  resolutionDepth: Int! # hops walked to reach EOA (0 = direct)
 }
 
-# ─── M3: GPv2Settlement Trades ──────────────────────────────────────────────
-
-type Trade {
-  id: ID! # txHash + "-" + logIndex
-  chainId: Int!
-  owner: String! @index
+# Standalone CoW orders settled through GPv2Settlement by an Aave V3 flash-loan
+# adapter (not ComposableCoW conditional orders). Executed-only: a row exists
+# iff the order settled. adapter <-> order is 1:1 (fresh CREATE2 per order).
+type FlashLoanOrder {
+  id: ID! # chainId + "_" + orderUid
+  # ── From the Trade event (always present) ──
+  orderUid: String! @index
+  chainId: Int! @index
+  adapter: String! @index # the per-order Aave adapter (Trade event owner topic)
   sellToken: String!
   buyToken: String!
-  sellAmount: BigInt!
-  buyAmount: BigInt!
-  feeAmount: BigInt!
-  orderUid: String! @index
-  blockNumber: Int!
+  executedSellAmount: String! # uint256 as decimal string (Trade event; refined by enricher)
+  executedBuyAmount: String!
+  feeAmount: String!
+  txHash: String! # FK -> Transaction.hash
+  blockNumber: BigInt! @index
   blockTimestamp: BigInt!
-  transactionHash: String! @index
-  # Linked conditional order (from ERC-1271 sig decode)
-  conditionalOrder: ConditionalOrder
-  # Resolved EOA owner (if owner is a COWShed proxy)
-  realOwner: String
+  # ── Decoded from orderUid (always present) ──
+  validTo: BigInt! # trailing uint32 of the order UID
+  # ── Resolved EOA, from the adapter's owner() call (durable on-chain) ──
+  owner: String @index
+  # ── From the orderbook (null until FlashLoanOrderEnricher fills them) ──
+  receiver: String
+  kind: FlashLoanOrderKind
+  sellAmountIntended: String
+  buyAmountIntended: String
+  # ── Derived ──
+  source: FlashLoanOrderSource!
+  type: FlashLoanOrderType # null when undetectable
+  # ── Orderbook-enrichment scheduling ──
+  enriched: Boolean! @index # mirrors "enrichedAt IS NULL" (getWhere cannot query null)
+  enrichedAt: BigInt # block timestamp enrichment succeeded; null = pending
+  enrichmentAttempts: Int! @index # failed/empty orderbook lookups; caps retries
 }
 
-type OrderBookOrder {
-  id: ID! # orderUid
-  orderUid: String! @index
-  owner: String! @index
-  status: String! # open | fulfilled | cancelled | expired
-  sellToken: String!
-  buyToken: String!
-  sellAmount: BigInt!
-  buyAmount: BigInt!
-  validTo: BigInt!
-  chainId: Int!
+# ─── Durable orderbook caches ────────────────────────────────────────────────
+# Upstream keeps these in a separate cow_cache Postgres schema so they survive
+# ponder redeploys. Envio equivalent: regular entities (survive restarts; on a
+# full re-sync they are rebuilt from the orderbook, same as a fresh deploy).
+
+# Per-UID cache of terminal order data. Used by both the discrete-order path
+# (status + executed amounts) and the flash-loan path (kind/receiver/intended).
+type OrderUidCache {
+  id: ID! # chainId + "_" + orderUid
+  chainId: Int! @index
+  orderUid: String!
+  status: String!
   fetchedAt: BigInt!
-  # Linked conditional order generator
-  conditionalOrder: ConditionalOrder
+  executedSellAmount: String
+  executedBuyAmount: String
+  kind: String
+  receiver: String
+  sellAmount: String
+  buyAmount: String
+}
+
+# Durable per-owner composable-order rows: every field needed to rebuild a
+# DiscreteOrder without re-hitting the orderbook, so OwnerBackfill drains only
+# the delta newer than MAX(creationDate) per owner. Keyed by generator hash
+# (stable across redeploys), not the per-deployment generator id.
+type ComposableOrderCache {
+  id: ID! # chainId + "_" + orderUid
+  chainId: Int! @index
+  orderUid: String!
+  owner: String! @index
+  generatorHash: String!
+  orderType: String!
+  status: String!
+  sellAmount: String!
+  buyAmount: String!
+  feeAmount: String!
+  validTo: BigInt
+  creationDate: BigInt!
+  executedSellAmount: String
+  executedBuyAmount: String
+  fetchedAt: BigInt!
 }
