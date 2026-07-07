@@ -27,7 +27,10 @@ export async function filterAndProcess(
   chainId: number,
   apiOrders: OrderbookOrder[],
 ): Promise<ComposableOrder[]> {
-  const results: ComposableOrder[] = [];
+  // First pass: decode signatures and compute param hashes. Thousands of a
+  // whale's orders map to a handful of generators, so dedupe hashes and match
+  // them with one _in query instead of one getWhere per order.
+  const decodedOrders: { order: OrderbookOrder; paramHash: string }[] = [];
 
   for (const order of apiOrders) {
     if (order.signingScheme !== SIGNING_SCHEME_EIP1271) continue;
@@ -55,15 +58,26 @@ export async function filterAndProcess(
       ),
     );
 
-    // Find the generator — there should be exactly one per (chainId, hash).
-    const generators = await context.ConditionalOrderGenerator.getWhere({
-      chainId: { _eq: chainId },
-      hash: { _eq: paramHash },
-    });
+    decodedOrders.push({ order, paramHash });
+  }
 
-    if (generators.length === 0) continue;
+  if (decodedOrders.length === 0) return [];
 
-    const generator = generators[0]!;
+  // Find the generators — exactly one per (chainId, hash).
+  const uniqueHashes = [...new Set(decodedOrders.map((d) => d.paramHash))];
+  const generators = await context.ConditionalOrderGenerator.getWhere({
+    chainId: { _eq: chainId },
+    hash: { _in: uniqueHashes },
+  });
+  const generatorByHash = new Map<string, { id: string; orderType: string }>(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    generators.map((g: any) => [g.hash, g]),
+  );
+
+  const results: ComposableOrder[] = [];
+  for (const { order, paramHash } of decodedOrders) {
+    const generator = generatorByHash.get(paramHash);
+    if (!generator) continue;
 
     results.push({
       uid: order.uid,
