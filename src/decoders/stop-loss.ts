@@ -3,20 +3,20 @@ import { decodeAbiParameters, type Hex } from "viem";
 export interface StopLossDecodedParams {
   sellToken: string;
   buyToken: string;
-  sellAmount: string;
-  buyAmount: string;
+  sellAmount: bigint;
+  buyAmount: bigint;
   appData: string;
   receiver: string;
   isSellOrder: boolean;
   isPartiallyFillable: boolean;
-  validTo: number;
-  sellTokenPriceOracle: string;
-  buyTokenPriceOracle: string;
-  strike: string;
-  maxTimeSinceLastOracleUpdate: string;
+  validTo: number;               // uint32
+  sellTokenPriceOracle: string;  // Chainlink aggregator
+  buyTokenPriceOracle: string;   // Chainlink aggregator
+  strike: bigint;                // int256 — may be negative
+  maxTimeSinceLastOracleUpdate: bigint;
 }
 
-const STOP_LOSS_ABI = [
+export const STOP_LOSS_ABI = [
   {
     type: "tuple",
     components: [
@@ -42,8 +42,8 @@ export function decodeStopLossStaticInput(staticInput: Hex): StopLossDecodedPara
   return {
     sellToken:                    d.sellToken.toLowerCase(),
     buyToken:                     d.buyToken.toLowerCase(),
-    sellAmount:                   d.sellAmount.toString(),
-    buyAmount:                    d.buyAmount.toString(),
+    sellAmount:                   d.sellAmount,
+    buyAmount:                    d.buyAmount,
     appData:                      d.appData,
     receiver:                     d.receiver.toLowerCase(),
     isSellOrder:                  d.isSellOrder,
@@ -51,7 +51,7 @@ export function decodeStopLossStaticInput(staticInput: Hex): StopLossDecodedPara
     validTo:                      d.validTo,
     sellTokenPriceOracle:         d.sellTokenPriceOracle.toLowerCase(),
     buyTokenPriceOracle:          d.buyTokenPriceOracle.toLowerCase(),
-    strike:                       d.strike.toString(),
-    maxTimeSinceLastOracleUpdate: d.maxTimeSinceLastOracleUpdate.toString(),
+    strike:                       d.strike,
+    maxTimeSinceLastOracleUpdate: d.maxTimeSinceLastOracleUpdate,
   };
 }

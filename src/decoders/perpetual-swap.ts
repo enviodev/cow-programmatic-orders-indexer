@@ -3,12 +3,12 @@ import { decodeAbiParameters, type Hex } from "viem";
 export interface PerpetualSwapDecodedParams {
   tokenA: string;
   tokenB: string;
-  validityBucketSeconds: number;
-  halfSpreadBps: string;
+  validityBucketSeconds: number;  // uint32
+  halfSpreadBps: bigint;
   appData: string;
 }
 
-const PERPETUAL_SWAP_ABI = [
+export const PERPETUAL_SWAP_ABI = [
   {
     type: "tuple",
     components: [
@@ -26,8 +26,8 @@ export function decodePerpetualSwapStaticInput(staticInput: Hex): PerpetualSwapD
   return {
     tokenA:                d.tokenA.toLowerCase(),
     tokenB:                d.tokenB.toLowerCase(),
-    validityBucketSeconds: Number(d.validityBucketSeconds),
-    halfSpreadBps:         d.halfSpreadBps.toString(),
+    validityBucketSeconds: d.validityBucketSeconds,
+    halfSpreadBps:         d.halfSpreadBps,
     appData:               d.appData,
   };
 }

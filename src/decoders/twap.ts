@@ -4,16 +4,16 @@ export interface TwapDecodedParams {
   sellToken: string;
   buyToken: string;
   receiver: string;
-  partSellAmount: string;
-  minPartLimit: string;
-  t0: string;
-  n: string;
-  t: string;
-  span: string;
-  appData: string;
+  partSellAmount: bigint;
+  minPartLimit: bigint;
+  t0: bigint;       // start epoch (0 = at mining time)
+  n: bigint;        // number of parts
+  t: bigint;        // seconds between parts
+  span: bigint;     // part validity duration (0 = fill interval)
+  appData: string;  // bytes32
 }
 
-const TWAP_ABI = [
+export const TWAP_ABI = [
   {
     type: "tuple",
     components: [
@@ -37,12 +37,12 @@ export function decodeTwapStaticInput(staticInput: Hex): TwapDecodedParams {
     sellToken:      d.sellToken.toLowerCase(),
     buyToken:       d.buyToken.toLowerCase(),
     receiver:       d.receiver.toLowerCase(),
-    partSellAmount: d.partSellAmount.toString(),
-    minPartLimit:   d.minPartLimit.toString(),
-    t0:             d.t0.toString(),
-    n:              d.n.toString(),
-    t:              d.t.toString(),
-    span:           d.span.toString(),
+    partSellAmount: d.partSellAmount,
+    minPartLimit:   d.minPartLimit,
+    t0:             d.t0,
+    n:              d.n,
+    t:              d.t,
+    span:           d.span,
     appData:        d.appData,
   };
 }

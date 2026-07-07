@@ -4,12 +4,12 @@ export interface TradeAboveThresholdDecodedParams {
   sellToken: string;
   buyToken: string;
   receiver: string;
-  validityBucketSeconds: number;
-  threshold: string;
+  validityBucketSeconds: number;  // uint32
+  threshold: bigint;
   appData: string;
 }
 
-const TRADE_ABOVE_THRESHOLD_ABI = [
+export const TRADE_ABOVE_THRESHOLD_ABI = [
   {
     type: "tuple",
     components: [
@@ -24,7 +24,7 @@ const TRADE_ABOVE_THRESHOLD_ABI = [
 ] as const;
 
 export function decodeTradeAboveThresholdStaticInput(
-  staticInput: Hex,
+  staticInput: Hex
 ): TradeAboveThresholdDecodedParams {
   const [d] = decodeAbiParameters(TRADE_ABOVE_THRESHOLD_ABI, staticInput);
   return {
@@ -32,7 +32,7 @@ export function decodeTradeAboveThresholdStaticInput(
     buyToken:              d.buyToken.toLowerCase(),
     receiver:              d.receiver.toLowerCase(),
     validityBucketSeconds: d.validityBucketSeconds,
-    threshold:             d.threshold.toString(),
+    threshold:             d.threshold,
     appData:               d.appData,
   };
 }

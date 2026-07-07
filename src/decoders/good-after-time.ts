@@ -4,16 +4,16 @@ export interface GoodAfterTimeDecodedParams {
   sellToken: string;
   buyToken: string;
   receiver: string;
-  sellAmount: string;
-  minSellBalance: string;
-  startTime: string;
-  endTime: string;
+  sellAmount: bigint;
+  minSellBalance: bigint;
+  startTime: bigint;
+  endTime: bigint;
   allowPartialFill: boolean;
-  priceCheckerPayload: string;
+  priceCheckerPayload: string;  // hex bytes — opaque (price-checker payload, not decoded)
   appData: string;
 }
 
-const GOOD_AFTER_TIME_ABI = [
+export const GOOD_AFTER_TIME_ABI = [
   {
     type: "tuple",
     components: [
@@ -37,10 +37,10 @@ export function decodeGoodAfterTimeStaticInput(staticInput: Hex): GoodAfterTimeD
     sellToken:           d.sellToken.toLowerCase(),
     buyToken:            d.buyToken.toLowerCase(),
     receiver:            d.receiver.toLowerCase(),
-    sellAmount:          d.sellAmount.toString(),
-    minSellBalance:      d.minSellBalance.toString(),
-    startTime:           d.startTime.toString(),
-    endTime:             d.endTime.toString(),
+    sellAmount:          d.sellAmount,
+    minSellBalance:      d.minSellBalance,
+    startTime:           d.startTime,
+    endTime:             d.endTime,
     allowPartialFill:    d.allowPartialFill,
     priceCheckerPayload: d.priceCheckerPayload,
     appData:             d.appData,
