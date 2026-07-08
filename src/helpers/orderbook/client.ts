@@ -32,6 +32,7 @@ import {
 } from "./cache.js";
 import {
   filterAndProcess,
+  matchHistoryRowsToGenerators,
   reconcileOpenCachedRows,
   remapToCurrentGenerators,
 } from "./processing.js";
@@ -112,7 +113,7 @@ export async function fetchComposableOrders(
     );
     if (expired()) return { orders: [], complete: false };
 
-    const delta = await filterAndProcess(context, chainId, page.orders);
+    const delta = await matchHistoryRowsToGenerators(context, chainId, page.rows);
     if (expired()) return { orders: [], complete: false };
     await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
     deltaCount = delta.length;

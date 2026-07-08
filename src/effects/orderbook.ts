@@ -9,7 +9,7 @@
  */
 
 import { createEffect, S } from "envio";
-import { ORDERBOOK_API_URLS } from "../data.js";
+import { COMPOSABLE_COW_HANDLER_ADDRESSES, ORDERBOOK_API_URLS } from "../data.js";
 import {
   ORDERBOOK_HTTP_TIMEOUT_MS,
   ORDERBOOK_MAX_RETRIES,
@@ -18,9 +18,11 @@ import {
   ORDERBOOK_RETRY_MAX_DELAY_MS,
   SIGNING_SCHEME_EIP1271,
 } from "../constants.js";
+import { encodeAbiParameters, keccak256 } from "viem";
 import { fetchWithTimeout, TimeoutError } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
 import { BATCH_SIZE, PAGE_LIMIT, type OrderbookOrder } from "../helpers/orderbook/types.js";
+import { decodeEip1271Signature } from "../decoders/erc1271-signature.js";
 
 /**
  * The orderbook API refused to answer (HTTP 429 or 5xx) after bounded retries.
@@ -232,6 +234,23 @@ export const orderbookAccountOrders = createEffect(
   },
 );
 
+/** Slim, pre-decoded composable-order row cached by orderbookAccountHistoryPage.
+ *  Raw orders carry multi-KB signature blobs; envio holds effect-cache entries
+ *  in memory, so the raw pages must never be cached (a 3-page window is ~10MB —
+ *  caching them OOM'd the indexer). Decoding here keeps entries ~200 bytes/row. */
+export interface HistoryPageRow {
+  uid: string;
+  paramHash: string; // keccak256(abi.encode(handler, salt, staticInput)) from the EIP-1271 signature
+  status: string;
+  sellAmount: string;
+  buyAmount: string;
+  feeAmount: string;
+  validTo: number;
+  creationDate: number; // Unix seconds
+  executedSellAmount: string | null;
+  executedBuyAmount: string | null;
+}
+
 /**
  * Cached history-page fetch for the bounded full-history drain (phase A of
  * fetchComposableOrders). Distinct from orderbookAccountOrders: no `since`
@@ -242,6 +261,9 @@ export const orderbookAccountOrders = createEffect(
  *   - new orders shifting the pagination: after a cache-replayed drain
  *     completes, fetchComposableOrders always runs a fresh cursor-delta pass
  * This makes repeat backfills (envio dev -r) nearly free on the orderbook.
+ *
+ * The EIP-1271 decode + param-hash computation (pure) runs in here so only
+ * slim rows are cached; generator matching (DB) stays in the caller.
  */
 export const orderbookAccountHistoryPage = createEffect(
   {
@@ -253,13 +275,13 @@ export const orderbookAccountHistoryPage = createEffect(
       pageSize: S.number,
       offset: S.number,
     }),
-    output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
+    output: S.string, // JSON { rows: HistoryPageRow[], complete: boolean, nextOffset: number }
     cache: true,
     rateLimit: { calls: 20, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
-    if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false, nextOffset: input.offset });
+    if (!apiBaseUrl) return JSON.stringify({ rows: [], complete: false, nextOffset: input.offset });
     const result = await fetchAccountOrdersRaw(
       apiBaseUrl,
       input.owner,
@@ -269,7 +291,44 @@ export const orderbookAccountHistoryPage = createEffect(
       undefined,
       input.offset,
     );
-    return JSON.stringify(result);
+
+    const rows: HistoryPageRow[] = [];
+    for (const order of result.orders) {
+      if (order.signingScheme !== SIGNING_SCHEME_EIP1271) continue;
+      if (order.status === "presignaturePending") continue;
+      const decoded = decodeEip1271Signature(order.signature as `0x${string}`);
+      if (!decoded) continue;
+      if (!COMPOSABLE_COW_HANDLER_ADDRESSES.has(decoded.handler)) continue;
+      const paramHash = keccak256(
+        encodeAbiParameters(
+          [
+            {
+              type: "tuple",
+              components: [
+                { name: "handler", type: "address" },
+                { name: "salt", type: "bytes32" },
+                { name: "staticInput", type: "bytes" },
+              ],
+            },
+          ],
+          [{ handler: decoded.handler, salt: decoded.salt, staticInput: decoded.staticInput }],
+        ),
+      );
+      rows.push({
+        uid: order.uid,
+        paramHash,
+        status: order.status,
+        sellAmount: order.sellAmount,
+        buyAmount: order.buyAmount,
+        feeAmount: order.feeAmount,
+        validTo: order.validTo,
+        creationDate: Math.floor(new Date(order.creationDate).getTime() / 1000),
+        executedSellAmount: order.executedSellAmount ?? null,
+        executedBuyAmount: order.executedBuyAmount ?? null,
+      });
+    }
+
+    return JSON.stringify({ rows, complete: result.complete, nextOffset: result.nextOffset });
   },
 );
 

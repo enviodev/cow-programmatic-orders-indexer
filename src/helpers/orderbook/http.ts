@@ -10,13 +10,17 @@ import {
   orderbookAccountOrders,
   orderbookOrdersByUids,
   OrderbookUnavailableError,
+  type HistoryPageRow,
 } from "../../effects/orderbook.js";
+
+export { type HistoryPageRow };
 import { PAGE_LIMIT, type OrderbookOrder } from "./types.js";
 
 export { OrderbookUnavailableError };
 
-/** Cached bounded history-page fetch (phase A of the owner drain). See the
- *  orderbookAccountHistoryPage effect for the staleness/self-heal contract. */
+/** Cached bounded history-page fetch (phase A of the owner drain). Returns
+ *  slim pre-decoded rows — see the orderbookAccountHistoryPage effect for the
+ *  staleness/self-heal contract and why raw orders are never cached. */
 export async function fetchAccountHistoryPage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -25,7 +29,7 @@ export async function fetchAccountHistoryPage(
   startOffset: number,
   maxPages: number,
   pageSize = PAGE_LIMIT,
-): Promise<{ orders: OrderbookOrder[]; complete: boolean; nextOffset: number }> {
+): Promise<{ rows: HistoryPageRow[]; complete: boolean; nextOffset: number }> {
   const json = await context.effect(orderbookAccountHistoryPage, {
     chainId,
     owner,
@@ -33,7 +37,7 @@ export async function fetchAccountHistoryPage(
     pageSize,
     offset: startOffset,
   });
-  return JSON.parse(json) as { orders: OrderbookOrder[]; complete: boolean; nextOffset: number };
+  return JSON.parse(json) as { rows: HistoryPageRow[]; complete: boolean; nextOffset: number };
 }
 
 /** Fetch orders for an owner with pagination. maxPages limits how many pages are

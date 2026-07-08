@@ -173,3 +173,45 @@ export async function remapToCurrentGenerators(
   }
   return results;
 }
+
+/** Match slim pre-decoded history rows (from the cached history-page effect)
+ *  to generators — the DB half of filterAndProcess. One _in query per batch. */
+export async function matchHistoryRowsToGenerators(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  chainId: number,
+  rows: import("../../effects/orderbook.js").HistoryPageRow[],
+): Promise<ComposableOrder[]> {
+  if (rows.length === 0) return [];
+
+  const uniqueHashes = [...new Set(rows.map((r) => r.paramHash))];
+  const generators = await context.ConditionalOrderGenerator.getWhere({
+    chainId: { _eq: chainId },
+    hash: { _in: uniqueHashes },
+  });
+  const generatorByHash = new Map<string, { id: string; orderType: string }>(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    generators.map((g: any) => [g.hash, g]),
+  );
+
+  const results: ComposableOrder[] = [];
+  for (const row of rows) {
+    const generator = generatorByHash.get(row.paramHash);
+    if (!generator) continue;
+    results.push({
+      uid: row.uid,
+      status: row.status,
+      generatorId: generator.id,
+      generatorHash: row.paramHash,
+      orderType: generator.orderType as OrderType,
+      sellAmount: row.sellAmount,
+      buyAmount: row.buyAmount,
+      feeAmount: row.feeAmount,
+      validTo: row.validTo,
+      creationDate: BigInt(row.creationDate),
+      executedSellAmount: row.executedSellAmount,
+      executedBuyAmount: row.executedBuyAmount,
+    });
+  }
+  return results;
+}
