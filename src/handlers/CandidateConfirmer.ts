@@ -174,7 +174,7 @@ if (!isTest) {
 
       if (stale.length > 0) {
         const staleStatuses = await fetchOrderStatusByUids(
-          context, chainId, stale.map((c: CandidateRow) => c.orderUid),
+          context, chainId, stale.map((c: CandidateRow) => c.orderUid), true,
         );
 
         // TWAP parts can age out of /by_uids before CandidateConfirmer sees them.

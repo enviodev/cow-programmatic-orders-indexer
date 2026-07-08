@@ -86,7 +86,8 @@ export async function precomputeAndDiscover(
   if (!precomputed || precomputed.length === 0) return false;
 
   const uids = precomputed.map((o) => o.orderUid);
-  const statuses = await fetchOrderStatusByUids(context, chainId, uids);
+  // Historical generators have all-terminal parts — use the persistent terminal cache.
+  const statuses = await fetchOrderStatusByUids(context, chainId, uids, true);
 
   for (const order of precomputed) {
     const statusInfo = statuses.get(order.orderUid);

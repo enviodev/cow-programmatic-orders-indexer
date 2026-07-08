@@ -20,6 +20,7 @@ import {
 import { TimeoutError, withTimeout } from "../withTimeout.js";
 import { log } from "../logger.js";
 import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
+import { orderbookTerminalOrdersByUids } from "../../effects/orderbook.js";
 import {
   cacheFlashLoanEnrichment,
   cacheUidStatuses,
@@ -224,6 +225,10 @@ export async function fetchOrderStatusByUids(
   context: any,
   chainId: number,
   uids: string[],
+  // True when the batch is expected to be all-terminal (historical precompute,
+  // stale-candidate drains): tries the resync-persistent terminal cache first,
+  // falling back to the fresh path when any UID is absent/open.
+  expectTerminal = false,
 ): Promise<Map<string, OrderStatusInfo>> {
   const result = new Map<string, OrderStatusInfo>();
   if (uids.length === 0) return result;
@@ -250,19 +255,34 @@ export async function fetchOrderStatusByUids(
 
   // Batch-fetch non-cached UIDs, capped at 2 × the per-request timeout.
   if (toFetch.length > 0) {
-    let fetched: OrderbookOrder[];
-    try {
-      fetched = await withTimeout(
-        fetchOrdersByUids(context, chainId, toFetch),
-        ORDERBOOK_HTTP_TIMEOUT_MS * 2,
-        "ob:statusByUids",
-      );
-    } catch (err) {
-      if (err instanceof TimeoutError) {
-        log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
-        return result; // cache-only map — caller treats missing UIDs as "not on API yet"
+    let fetched: OrderbookOrder[] | null = null;
+
+    if (expectTerminal) {
+      try {
+        const json = await context.effect(orderbookTerminalOrdersByUids, {
+          chainId,
+          uidsJson: JSON.stringify(toFetch),
+        });
+        fetched = JSON.parse(json) as OrderbookOrder[];
+      } catch {
+        fetched = null; // some UID absent/open — take the fresh path below
       }
-      throw err;
+    }
+
+    if (fetched === null) {
+      try {
+        fetched = await withTimeout(
+          fetchOrdersByUids(context, chainId, toFetch),
+          ORDERBOOK_HTTP_TIMEOUT_MS * 2,
+          "ob:statusByUids",
+        );
+      } catch (err) {
+        if (err instanceof TimeoutError) {
+          log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
+          return result; // cache-only map — caller treats missing UIDs as "not on API yet"
+        }
+        throw err;
+      }
     }
 
     const newTerminal: ComposableOrder[] = [];
