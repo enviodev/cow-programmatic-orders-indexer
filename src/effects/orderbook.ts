@@ -16,6 +16,7 @@ import {
   ORDERBOOK_RETRY_BASE_MS,
   ORDERBOOK_RETRY_BUDGET_MS,
   ORDERBOOK_RETRY_MAX_DELAY_MS,
+  SIGNING_SCHEME_EIP1271,
 } from "../constants.js";
 import { fetchWithTimeout, TimeoutError } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
@@ -226,6 +227,47 @@ export const orderbookAccountOrders = createEffect(
       input.pageSize,
       input.since,
       input.offset ?? 0,
+    );
+    return JSON.stringify(result);
+  },
+);
+
+/**
+ * Cached history-page fetch for the bounded full-history drain (phase A of
+ * fetchComposableOrders). Distinct from orderbookAccountOrders: no `since`
+ * cursor, cache:true — a (owner, offset) page of DESC-sorted history is stable
+ * enough to cache because staleness self-heals downstream:
+ *   - statuses frozen at fetch time: non-terminal rows are re-checked via
+ *     by_uids (reconcileOpenCachedRows) and OrderStatusTracker
+ *   - new orders shifting the pagination: after a cache-replayed drain
+ *     completes, fetchComposableOrders always runs a fresh cursor-delta pass
+ * This makes repeat backfills (envio dev -r) nearly free on the orderbook.
+ */
+export const orderbookAccountHistoryPage = createEffect(
+  {
+    name: "orderbookAccountHistoryPage",
+    input: S.schema({
+      chainId: S.number,
+      owner: S.string,
+      maxPages: S.number,
+      pageSize: S.number,
+      offset: S.number,
+    }),
+    output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
+    cache: true,
+    rateLimit: { calls: 20, per: "second" as const },
+  },
+  async ({ input }): Promise<string> => {
+    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+    if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false, nextOffset: input.offset });
+    const result = await fetchAccountOrdersRaw(
+      apiBaseUrl,
+      input.owner,
+      input.maxPages,
+      SIGNING_SCHEME_EIP1271,
+      input.pageSize,
+      undefined,
+      input.offset,
     );
     return JSON.stringify(result);
   },

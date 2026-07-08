@@ -19,7 +19,7 @@ import {
 } from "../../constants.js";
 import { TimeoutError, withTimeout } from "../withTimeout.js";
 import { log } from "../logger.js";
-import { fetchAccountOrders, fetchOrdersByUids } from "./http.js";
+import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
 import {
   cacheFlashLoanEnrichment,
   cacheUidStatuses,
@@ -98,17 +98,17 @@ export async function fetchComposableOrders(
   const progressId = `${chainId}_${owner.toLowerCase()}`;
   const progress = await context.OwnerDrainProgress.get(progressId);
 
-  let complete: boolean;
   let deltaCount = 0;
 
   if (!progress?.complete) {
-    // Phase A — bounded, resumable full-history drain.
+    // Phase A — bounded, resumable full-history drain. Pages are served from
+    // the persistent effect cache on repeat backfills (see
+    // orderbookAccountHistoryPage), so re-syncs cost ~zero orderbook I/O here.
     const startOffset = progress?.nextOffset ?? 0;
     log("info", "ob:fetch", { owner, chainId, phase: "history", offset: startOffset });
 
-    const page = await fetchAccountOrders(
-      context, chainId, owner, DRAIN_PAGES_PER_FIRING, SIGNING_SCHEME_EIP1271,
-      PAGE_LIMIT, undefined, startOffset,
+    const page = await fetchAccountHistoryPage(
+      context, chainId, owner, startOffset, DRAIN_PAGES_PER_FIRING,
     );
     if (expired()) return { orders: [], complete: false };
 
@@ -128,28 +128,29 @@ export async function fetchComposableOrders(
         complete: page.complete,
       });
     }
-    complete = page.complete;
 
-    if (!complete) {
-      log("info", "ob:fetchResult", { owner, chainId, phase: "history", delta: deltaCount, nextOffset: page.nextOffset, complete });
+    if (!page.complete) {
+      log("info", "ob:fetchResult", { owner, chainId, phase: "history", delta: deltaCount, nextOffset: page.nextOffset, complete: false });
       return { orders: [], complete: false }; // resumed next firing
     }
-  } else {
-    // Phase B — incremental delta drain from the creation-date cursor.
-    const cursor = await readOwnerBackfillCursor(context, chainId, owner);
-    log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
-
-    const delta_ = await fetchAccountOrders(
-      context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
-    );
-    if (expired()) return { orders: [], complete: false };
-    const delta = await filterAndProcess(context, chainId, delta_.orders);
-    if (expired()) return { orders: [], complete: false };
-    await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
-    deltaCount = delta.length;
-    complete = delta_.complete;
-    if (!complete) return { orders: [], complete: false };
+    // Fall through to the delta pass: history pages may have been replayed
+    // from the effect cache, so an uncached cursor fetch picks up anything
+    // newer than the cached history before the owner is marked backfilled.
   }
+
+  // Phase B — incremental delta drain from the creation-date cursor (uncached).
+  const cursor = await readOwnerBackfillCursor(context, chainId, owner);
+  log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
+
+  const delta_ = await fetchAccountOrders(
+    context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
+  );
+  if (expired()) return { orders: [], complete: false };
+  const delta = await filterAndProcess(context, chainId, delta_.orders);
+  if (expired()) return { orders: [], complete: false };
+  await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+  deltaCount += delta.length;
+  if (!delta_.complete) return { orders: [], complete: false };
 
   // Rebuild the full owner set from the durable cache (delta + everything older).
   const cachedRows = await readOwnerComposableCache(context, chainId, owner);
@@ -163,8 +164,8 @@ export async function fetchComposableOrders(
   // Re-map by the stable hash to the current generator id.
   const results = await remapToCurrentGenerators(context, chainId, reconciled);
 
-  log("info", "ob:fetchResult", { owner, chainId, delta: deltaCount, total: results.length, complete });
-  return { orders: results, complete };
+  log("info", "ob:fetchResult", { owner, chainId, delta: deltaCount, total: results.length, complete: true });
+  return { orders: results, complete: true };
 }
 
 /**

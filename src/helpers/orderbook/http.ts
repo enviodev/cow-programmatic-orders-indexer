@@ -6,6 +6,7 @@
 
 import { type Hex } from "viem";
 import {
+  orderbookAccountHistoryPage,
   orderbookAccountOrders,
   orderbookOrdersByUids,
   OrderbookUnavailableError,
@@ -13,6 +14,27 @@ import {
 import { PAGE_LIMIT, type OrderbookOrder } from "./types.js";
 
 export { OrderbookUnavailableError };
+
+/** Cached bounded history-page fetch (phase A of the owner drain). See the
+ *  orderbookAccountHistoryPage effect for the staleness/self-heal contract. */
+export async function fetchAccountHistoryPage(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  chainId: number,
+  owner: Hex,
+  startOffset: number,
+  maxPages: number,
+  pageSize = PAGE_LIMIT,
+): Promise<{ orders: OrderbookOrder[]; complete: boolean; nextOffset: number }> {
+  const json = await context.effect(orderbookAccountHistoryPage, {
+    chainId,
+    owner,
+    maxPages,
+    pageSize,
+    offset: startOffset,
+  });
+  return JSON.parse(json) as { orders: OrderbookOrder[]; complete: boolean; nextOffset: number };
+}
 
 /** Fetch orders for an owner with pagination. maxPages limits how many pages are
  *  fetched (0 = unlimited). sinceCreationDate (Unix seconds) enables the
