@@ -40,6 +40,32 @@ export class OrderbookUnavailableError extends Error {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Global concurrency cap for orderbook HTTP. Envio's effect rateLimit only
+ * shapes ADMISSION (calls/second) — in-flight concurrency is unbounded, so a
+ * latency spike snowballs (measured: 500 concurrent POSTs, 18s/call, queue
+ * of 8k+). A shared semaphore across every orderbook effect keeps the API
+ * healthy: ~24 in flight sustains full throughput at normal ~100ms latency
+ * without ever stampeding it.
+ */
+const MAX_ORDERBOOK_CONCURRENCY = 24;
+let httpSlotsFree = MAX_ORDERBOOK_CONCURRENCY;
+const httpSlotWaiters: Array<() => void> = [];
+
+async function acquireHttpSlot(): Promise<void> {
+  if (httpSlotsFree > 0) {
+    httpSlotsFree--;
+    return;
+  }
+  await new Promise<void>((resolve) => httpSlotWaiters.push(resolve));
+}
+
+function releaseHttpSlot(): void {
+  const next = httpSlotWaiters.shift();
+  if (next) next();
+  else httpSlotsFree++;
+}
+
 /** Parse an orderbook order's ISO creationDate into Unix seconds. */
 function orderCreationSeconds(order: OrderbookOrder): number {
   return Math.floor(new Date(order.creationDate).getTime() / 1000);
@@ -61,6 +87,19 @@ function parseRetryAfter(value: string | null): number | null {
  * Throws OrderbookUnavailableError once retries/budget are exhausted.
  */
 async function fetchOrderbook(
+  url: string,
+  init: RequestInit | undefined,
+  endpoint: string,
+): Promise<Response> {
+  await acquireHttpSlot();
+  try {
+    return await fetchOrderbookInner(url, init, endpoint);
+  } finally {
+    releaseHttpSlot();
+  }
+}
+
+async function fetchOrderbookInner(
   url: string,
   init: RequestInit | undefined,
   endpoint: string,
