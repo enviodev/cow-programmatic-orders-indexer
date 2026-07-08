@@ -87,6 +87,19 @@ export function pollerActivationFloor(chainId: number): number {
   return POLLER_ACTIVATION_FLOOR[chainId] ?? 0;
 }
 
+/** onBlock `where` filter for realtime pollers: per-chain stride, plus the
+ *  activation floor when one is configured. `_gte` must be omitted when there
+ *  is no floor — envio rejects a _gte below the chain start block. */
+export function pollerBlockFilter(chainId: number): {
+  block: { number: { _gte?: number; _every: number } };
+} {
+  const floor = pollerActivationFloor(chainId);
+  const every = blockHandlerInterval(chainId);
+  return floor > 0
+    ? { block: { number: { _gte: floor, _every: every } } }
+    : { block: { number: { _every: every } } };
+}
+
 /**
  * Resolve the block timestamp in an onBlock handler. envio only passes the
  * block number to onBlock handlers, so this reads the header via the cached

@@ -9,7 +9,7 @@ import { DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK } from "../constants.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
 const VALID_DISCRETE_STATUSES = new Set(["fulfilled", "unfilled", "expired", "cancelled"]);
 
@@ -17,7 +17,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "OrderStatusTracker",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

@@ -25,7 +25,7 @@ import {
 import { fetchComposableOrders, upsertDiscreteOrders } from "../helpers/orderbook/client.js";
 import { TimeoutError, withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { NON_DETERMINISTIC_TYPES } from "../utils/order-types.js";
 
 // Shared drain — registered for both the historical and live block handlers below.
@@ -132,7 +132,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "OwnerBackfillLive",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

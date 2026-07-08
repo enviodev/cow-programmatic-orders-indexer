@@ -15,7 +15,7 @@ import {
   FLASH_LOAN_BACKFILL_SLICE_SIZE,
 } from "../constants.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { selectPendingFlashLoanOrders, enrichFlashLoanOrders } from "../helpers/flashLoanShared.js";
 
 // One-shot backfill guard, per chain per process (upstream achieves this with
@@ -26,7 +26,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "FlashLoanOrderBackfiller",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return;
@@ -58,7 +58,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "FlashLoanOrderEnricher",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

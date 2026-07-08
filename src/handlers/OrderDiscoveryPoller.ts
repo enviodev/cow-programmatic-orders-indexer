@@ -22,7 +22,7 @@ import {
 import { pollTradeableOrders, type PollOrderResult } from "../effects/rpc.js";
 import { computeOrderUid, KIND_SELL, type GPv2OrderData } from "../helpers/orderUid.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
 
@@ -63,7 +63,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "OrderDiscoveryPoller",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       // startBlock "latest" upstream — only poll once caught up to the tip.

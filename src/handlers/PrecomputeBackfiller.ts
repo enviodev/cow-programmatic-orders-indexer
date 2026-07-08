@@ -12,7 +12,7 @@
 
 import { indexer } from "envio";
 import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
-import { blockTimestamp, blockHandlerInterval, isTest, pollerActivationFloor, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { log } from "../helpers/logger.js";
 import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
@@ -23,7 +23,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "PrecomputeBackfiller",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return;

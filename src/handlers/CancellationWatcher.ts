@@ -18,13 +18,13 @@ import {
 } from "../constants.js";
 import { checkOrdersActive } from "../effects/rpc.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
 if (!isTest) {
   indexer.onBlock(
     {
       name: "CancellationWatcher",
-      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => pollerBlockFilter(chain.id),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
