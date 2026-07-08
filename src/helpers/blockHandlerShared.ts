@@ -56,6 +56,16 @@ async function resolveActivationFloors(): Promise<Record<number, number>> {
         floors[chain.chainId] = override;
         return;
       }
+      // Opt-in (POLLER_FLOOR_FROM_HEAD=1): anchor pollers just below the
+      // HyperSync head to skip their historical no-op firings entirely.
+      // Default 0 = pollers fire through history (they no-op behind the
+      // isRealtime gate); envio chews these at tens of thousands/sec and the
+      // precompute deferral keeps batches from blocking on the orderbook, so
+      // the default favours the simpler, well-trodden path.
+      if (process.env.POLLER_FLOOR_FROM_HEAD !== "1") {
+        floors[chain.chainId] = 0;
+        return;
+      }
       try {
         const height = await hypersyncHeight(chain.chainId);
         floors[chain.chainId] = Math.max(0, height - ACTIVATION_MARGIN_BLOCKS);
