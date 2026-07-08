@@ -289,18 +289,50 @@ export interface AaveSettlementCandidate {
   type: "RepayWithCollateral" | "CollateralSwap" | "DebtSwap" | null;
 }
 
+/** Scan failed on a transport-level error (RPC timeout / rate limit / network).
+ *  Thrown (never returned) so the failure is NOT persisted in the effect cache —
+ *  the handler records a PendingSettlementScan and FlashLoanScanRetrier retries.
+ *  Upstream silently drops these settlements. */
+export class SettlementScanUnavailableError extends Error {
+  constructor(stage: string, cause: unknown) {
+    super(`[COW:scan-unavailable] ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "SettlementScanUnavailableError";
+  }
+}
+
+/** Transport-level failure (retryable) vs an execution revert (a real answer:
+ *  "not an adapter"). viem transport errors: HttpRequestError family; plus our
+ *  own TimeoutError from withTimeout. */
+function isTransportError(err: unknown): boolean {
+  if (err instanceof TimeoutError) return true;
+  let current: unknown = err;
+  for (let depth = 0; depth < 6 && current instanceof Error; depth++) {
+    if (
+      current.name === "HttpRequestError" ||
+      current.name === "TimeoutError" ||
+      current.name === "RpcRequestError" ||
+      current.name === "SocketClosedError" ||
+      current.name === "WebSocketRequestError"
+    ) {
+      return true;
+    }
+    current = (current as Error & { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 export const scanAaveSettlement = createEffect(
   {
     name: "scanAaveSettlement",
     input: S.schema({ chainId: S.number, txHash: S.string }),
     output: S.string, // JSON-serialized AaveSettlementCandidate[]
-    cache: true, // mined-tx analysis is immutable
+    cache: true, // mined-tx analysis is immutable; failures THROW so only successes cache
     rateLimit: { calls: 10, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const { chainId, txHash } = input;
     const client = getClient(chainId);
-    if (!client) return "[]";
+    if (!client) throw new SettlementScanUnavailableError("no-rpc", `ENVIO_RPC_URL_${chainId} unset`);
 
     const settlementDeployment = GPV2_SETTLEMENT_DEPLOYMENTS[chainId];
     if (!settlementDeployment) return "[]";
@@ -317,8 +349,10 @@ export const scanAaveSettlement = createEffect(
         "scanAaveSettlement:getTransactionReceipt",
       );
     } catch (err) {
+      // A mined settlement tx always has a receipt eventually — any failure
+      // here (incl. not-found from a lagging node) is worth retrying.
       log("warn", "scanAaveSettlement:receipt_failed", { chainId, txHash, err: err instanceof Error ? err.message : String(err) });
-      return "[]";
+      throw new SettlementScanUnavailableError("receipt", err);
     }
 
     const candidates: AaveSettlementCandidate[] = [];
@@ -339,7 +373,7 @@ export const scanAaveSettlement = createEffect(
         );
       } catch (err) {
         log("warn", "scanAaveSettlement:getCode_failed", { chainId, owner, err: err instanceof Error ? err.message : String(err) });
-        continue;
+        throw new SettlementScanUnavailableError("getCode", err); // transport — retry the whole scan
       }
       if (!code || code === "0x") continue; // EOA — not an adapter
 
@@ -351,7 +385,10 @@ export const scanAaveSettlement = createEffect(
           "scanAaveSettlement:call:FACTORY",
         );
         factoryData = result.data;
-      } catch {
+      } catch (err) {
+        if (isTransportError(err)) {
+          throw new SettlementScanUnavailableError("FACTORY", err); // retryable
+        }
         continue; // reverted — not an adapter
       }
 
@@ -387,6 +424,10 @@ export const scanAaveSettlement = createEffect(
         );
         eoaOwner = (resolved as string).toLowerCase();
       } catch (err) {
+        if (isTransportError(err)) {
+          throw new SettlementScanUnavailableError("owner", err); // retryable
+        }
+        // Revert — keep the order with owner null (upstream behaviour).
         log("warn", "scanAaveSettlement:readOwner_failed", { chainId, owner, err: err instanceof Error ? err.message : String(err) });
       }
 

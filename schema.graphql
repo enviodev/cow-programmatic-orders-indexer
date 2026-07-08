@@ -168,6 +168,19 @@ type FlashLoanOrder {
   enrichmentAttempts: Int! @index # failed/empty orderbook lookups; caps retries
 }
 
+# Settlements whose Aave receipt scan failed on transport errors (RPC timeout /
+# rate limit). Upstream drops these silently — the settlement is never scanned
+# again and its flash-loan orders are lost. Here FlashLoanScanRetrier retries
+# them until the scan succeeds or the attempt cap is reached.
+type PendingSettlementScan {
+  id: ID! # chainId + "_" + txHash
+  chainId: Int! @index
+  txHash: String!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  attempts: Int! @index
+}
+
 # ─── Durable orderbook caches ────────────────────────────────────────────────
 # Upstream keeps these in a separate cow_cache Postgres schema so they survive
 # ponder redeploys. Envio equivalent: regular entities (survive restarts; on a

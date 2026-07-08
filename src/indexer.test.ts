@@ -400,6 +400,15 @@ describe("Settlement Handler", () => {
 
     const orders = await indexer.FlashLoanOrder.getAll();
     expect(orders.length).toBe(0);
+
+    // The fake tx's receipt fetch fails on transport → the settlement is
+    // queued for FlashLoanScanRetrier instead of being dropped.
+    const pending = await indexer.PendingSettlementScan.getAll();
+    expect(pending.length).toBe(1);
+    expect(pending[0]!.txHash).toBe(
+      "0x3333333333333333333333333333333333333333333333333333333333333333",
+    );
+    expect(pending[0]!.attempts).toBe(0);
   }, 30_000);
 });
 
