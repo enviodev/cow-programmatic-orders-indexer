@@ -255,33 +255,54 @@ export async function fetchOrderStatusByUids(
 
   // Batch-fetch non-cached UIDs, capped at 2 × the per-request timeout.
   if (toFetch.length > 0) {
-    let fetched: OrderbookOrder[] | null = null;
+    const fetched: OrderbookOrder[] = [];
+    let fallbackUids: string[] = toFetch;
 
     if (expectTerminal) {
-      try {
-        const json = await context.effect(orderbookTerminalOrdersByUids, {
-          chainId,
-          uidsJson: JSON.stringify(toFetch),
-        });
-        fetched = JSON.parse(json) as OrderbookOrder[];
-      } catch {
-        fetched = null; // some UID absent/open — take the fresh path below
+      // Envio indexes effect inputs in Postgres (btree row cap 8191 bytes) —
+      // chunk the uidsJson so each cached input stays well under the limit.
+      // Chunking also improves hit granularity: one open UID only takes its
+      // own chunk down the fresh path.
+      const TERMINAL_CHUNK = 40;
+      const chunks: string[][] = [];
+      for (let i = 0; i < toFetch.length; i += TERMINAL_CHUNK) {
+        chunks.push(toFetch.slice(i, i + TERMINAL_CHUNK));
       }
+      const chunkResults = await Promise.all(
+        chunks.map(async (chunk) => {
+          try {
+            const json = await context.effect(orderbookTerminalOrdersByUids, {
+              chainId,
+              uidsJson: JSON.stringify(chunk),
+            });
+            return JSON.parse(json) as OrderbookOrder[];
+          } catch {
+            return null; // some UID absent/open — this chunk takes the fresh path
+          }
+        }),
+      );
+      fallbackUids = [];
+      chunkResults.forEach((r, i) => {
+        if (r) fetched.push(...r);
+        else fallbackUids.push(...chunks[i]!);
+      });
     }
 
-    if (fetched === null) {
+    if (fallbackUids.length > 0) {
       try {
-        fetched = await withTimeout(
-          fetchOrdersByUids(context, chainId, toFetch),
+        fetched.push(...await withTimeout(
+          fetchOrdersByUids(context, chainId, fallbackUids),
           ORDERBOOK_HTTP_TIMEOUT_MS * 2,
           "ob:statusByUids",
-        );
+        ));
       } catch (err) {
         if (err instanceof TimeoutError) {
-          log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
-          return result; // cache-only map — caller treats missing UIDs as "not on API yet"
+          // Proceed with whatever the terminal chunks yielded — callers treat
+          // missing UIDs as "not on API yet" and retry later.
+          log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: fallbackUids.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
+        } else {
+          throw err;
         }
-        throw err;
       }
     }
 
