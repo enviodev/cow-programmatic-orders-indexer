@@ -40,7 +40,7 @@ indexer.onEvent(
 
     let candidates: AaveSettlementCandidate[];
     try {
-      const candidatesJson = await context.effect(scanAaveSettlement, { chainId, txHash });
+      const candidatesJson = await context.effect(scanAaveSettlement, { chainId, txHash, blockNumber: event.block.number });
       candidates = JSON.parse(candidatesJson) as AaveSettlementCandidate[];
     } catch (err) {
       // Transport failure — queue for FlashLoanScanRetrier instead of losing

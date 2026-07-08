@@ -28,6 +28,7 @@ import {
   decodeValidToFromOrderUid,
   detectFlashLoanOrderType,
 } from "../decoders/flash-loan-order.js";
+import { hypersyncBlockLogs, hypersyncBlockTimestamp } from "../helpers/hypersync.js";
 
 // ─── Per-chain viem clients (lazy-initialized) ─────────────────────────────
 
@@ -303,13 +304,13 @@ export class SettlementScanUnavailableError extends Error {
 export const scanAaveSettlement = createEffect(
   {
     name: "scanAaveSettlement",
-    input: S.schema({ chainId: S.number, txHash: S.string }),
+    input: S.schema({ chainId: S.number, txHash: S.string, blockNumber: S.number }),
     output: S.string, // JSON-serialized AaveSettlementCandidate[]
     cache: true, // mined-tx analysis is immutable; failures THROW so only successes cache
     rateLimit: { calls: 10, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
-    const { chainId, txHash } = input;
+    const { chainId, txHash, blockNumber } = input;
     const client = getClient(chainId);
     if (!client) throw new SettlementScanUnavailableError("no-rpc", `ENVIO_RPC_URL_${chainId} unset`);
 
@@ -320,18 +321,15 @@ export const scanAaveSettlement = createEffect(
     const adapterFactoryAddress = AAVE_V3_ADAPTER_FACTORY_ADDRESSES[chainId]?.toLowerCase();
     if (!adapterFactoryAddress) return "[]";
 
-    let receipt: Awaited<ReturnType<typeof client.getTransactionReceipt>>;
+    // Trade-log lookup goes to HyperSync (the block is already indexed there —
+    // that's where the Settlement event came from), keeping RPC for the state
+    // reads only. One HTTP query replaces the receipt fetch.
+    let blockTradeLogs;
     try {
-      receipt = await withTimeout(
-        client.getTransactionReceipt({ hash: txHash as Hex }),
-        BLOCK_HANDLER_RPC_TIMEOUT_MS,
-        "scanAaveSettlement:getTransactionReceipt",
-      );
+      blockTradeLogs = await hypersyncBlockLogs(chainId, blockNumber, settlementAddress, TRADE_TOPIC);
     } catch (err) {
-      // A mined settlement tx always has a receipt eventually — any failure
-      // here (incl. not-found from a lagging node) is worth retrying.
-      log("warn", "scanAaveSettlement:receipt_failed", { chainId, txHash, err: err instanceof Error ? err.message : String(err) });
-      throw new SettlementScanUnavailableError("receipt", err);
+      log("warn", "scanAaveSettlement:hypersync_failed", { chainId, txHash, err: err instanceof Error ? err.message : String(err) });
+      throw new SettlementScanUnavailableError("hypersync-logs", err);
     }
 
     // Settlement events are sparse (~1 per batch), so envio's preload
@@ -339,11 +337,10 @@ export const scanAaveSettlement = createEffect(
     // Batch the per-owner checks: ONE multicall for FACTORY() across all
     // trade owners (an EOA or non-adapter simply fails to decode), then one
     // parallel round of owner() + getCode for the confirmed adapters only.
-    const tradeLogs = receipt.logs.filter(
-      (txLog) =>
-        txLog.address.toLowerCase() === settlementAddress &&
-        txLog.topics[0] === TRADE_TOPIC,
-    );
+    const txHashLower = txHash.toLowerCase();
+    const tradeLogs = blockTradeLogs
+      .filter((l) => l.transaction_hash?.toLowerCase() === txHashLower && l.topic1)
+      .map((l) => ({ topics: [l.topic0!, l.topic1!] as const, data: l.data as `0x${string}` }));
     if (tradeLogs.length === 0) return "[]";
 
     const owners = [...new Set(
@@ -462,6 +459,13 @@ export const getBlockTimestamp = createEffect(
     rateLimit: { calls: 10, per: "second" as const },
   },
   async ({ input }): Promise<number | null> => {
+    // Header reads come from HyperSync (no RPC quota); RPC is the fallback.
+    try {
+      const ts = await hypersyncBlockTimestamp(input.chainId, input.blockNumber);
+      if (ts != null) return ts;
+    } catch {
+      // fall through to RPC
+    }
     const client = getClient(input.chainId);
     if (!client) return null;
     try {

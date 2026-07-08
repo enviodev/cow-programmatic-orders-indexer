@@ -49,6 +49,7 @@ if (!isTest) {
           const candidatesJson = await context.effect(scanAaveSettlement, {
             chainId,
             txHash: scan.txHash,
+            blockNumber: Number(scan.blockNumber),
           });
           candidates = JSON.parse(candidatesJson) as AaveSettlementCandidate[];
         } catch {
