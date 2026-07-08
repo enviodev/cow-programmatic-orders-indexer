@@ -45,7 +45,12 @@ function getClient(chainId: number): PublicClient | null {
     if (!rpcUrl) return null; // No RPC configured — skip gracefully
     const chain = CHAINS[chainId];
     if (!chain) return null;
-    client = createPublicClient({ chain, transport: http(rpcUrl) });
+    client = createPublicClient({
+      chain,
+      // Merge concurrent JSON-RPC calls into single HTTP requests — cuts
+      // round-trips for every effect sharing this client.
+      transport: http(rpcUrl, { batch: { batchSize: 20, wait: 16 } }),
+    });
     clients.set(chainId, client);
   }
   return client;
@@ -271,11 +276,6 @@ const TRADE_TOPIC = keccak256(
   toBytes("Trade(address,address,address,uint256,uint256,uint256,bytes)"),
 );
 
-// FACTORY() selector — keccak256("FACTORY()")[0:4].
-// Raw eth_call instead of readContract to avoid noisy decode errors on
-// non-adapter contracts that don't implement FACTORY().
-const FACTORY_SELECTOR = "0x2dd31000" as const;
-
 export interface AaveSettlementCandidate {
   adapter: string;
   orderUid: string;
@@ -298,27 +298,6 @@ export class SettlementScanUnavailableError extends Error {
     super(`[COW:scan-unavailable] ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "SettlementScanUnavailableError";
   }
-}
-
-/** Transport-level failure (retryable) vs an execution revert (a real answer:
- *  "not an adapter"). viem transport errors: HttpRequestError family; plus our
- *  own TimeoutError from withTimeout. */
-function isTransportError(err: unknown): boolean {
-  if (err instanceof TimeoutError) return true;
-  let current: unknown = err;
-  for (let depth = 0; depth < 6 && current instanceof Error; depth++) {
-    if (
-      current.name === "HttpRequestError" ||
-      current.name === "TimeoutError" ||
-      current.name === "RpcRequestError" ||
-      current.name === "SocketClosedError" ||
-      current.name === "WebSocketRequestError"
-    ) {
-      return true;
-    }
-    current = (current as Error & { cause?: unknown }).cause;
-  }
-  return false;
 }
 
 export const scanAaveSettlement = createEffect(
@@ -355,80 +334,101 @@ export const scanAaveSettlement = createEffect(
       throw new SettlementScanUnavailableError("receipt", err);
     }
 
+    // Settlement events are sparse (~1 per batch), so envio's preload
+    // parallelism can't overlap scans — per-call latency is everything.
+    // Batch the per-owner checks: ONE multicall for FACTORY() across all
+    // trade owners (an EOA or non-adapter simply fails to decode), then one
+    // parallel round of owner() + getCode for the confirmed adapters only.
+    const tradeLogs = receipt.logs.filter(
+      (txLog) =>
+        txLog.address.toLowerCase() === settlementAddress &&
+        txLog.topics[0] === TRADE_TOPIC,
+    );
+    if (tradeLogs.length === 0) return "[]";
+
+    const owners = [...new Set(
+      tradeLogs.map((txLog) => `0x${txLog.topics[1]!.slice(26)}` as `0x${string}`),
+    )];
+
+    let factoryResults;
+    try {
+      factoryResults = await withTimeout(
+        client.multicall({
+          contracts: owners.map((owner) => ({
+            address: owner,
+            abi: AaveV3AdapterHelperAbi,
+            functionName: "FACTORY" as const,
+          })),
+          allowFailure: true,
+        }),
+        BLOCK_HANDLER_RPC_TIMEOUT_MS,
+        "scanAaveSettlement:multicall:FACTORY",
+      );
+    } catch (err) {
+      throw new SettlementScanUnavailableError("FACTORY", err); // transport — retry the whole scan
+    }
+
+    const adapterSet = new Set<string>();
+    for (let i = 0; i < owners.length; i++) {
+      const r = factoryResults[i];
+      // Failure = EOA / non-adapter (empty returndata or revert) — a real answer.
+      if (r?.status !== "success") continue;
+      if ((r.result as string).toLowerCase() !== adapterFactoryAddress) continue;
+      adapterSet.add(owners[i]!.toLowerCase());
+    }
+    if (adapterSet.size === 0) return "[]";
+
+    // owner() + getCode for confirmed adapters, in parallel (transport-batched).
+    const adapters = [...adapterSet] as `0x${string}`[];
+    let ownerResults;
+    let codes: (`0x${string}` | undefined)[];
+    try {
+      [ownerResults, codes] = await withTimeout(
+        Promise.all([
+          client.multicall({
+            contracts: adapters.map((adapter) => ({
+              address: adapter,
+              abi: AaveV3AdapterHelperAbi,
+              functionName: "owner" as const,
+            })),
+            allowFailure: true,
+          }),
+          Promise.all(adapters.map((adapter) => client.getCode({ address: adapter }))),
+        ]),
+        BLOCK_HANDLER_RPC_TIMEOUT_MS,
+        "scanAaveSettlement:adapterDetails",
+      );
+    } catch (err) {
+      throw new SettlementScanUnavailableError("adapterDetails", err); // retryable
+    }
+
+    const eoaByAdapter = new Map<string, string | null>();
+    const typeByAdapter = new Map<string, ReturnType<typeof detectFlashLoanOrderType>>();
+    for (let i = 0; i < adapters.length; i++) {
+      const adapter = adapters[i]!;
+      const r = ownerResults[i];
+      if (r?.status === "success") {
+        eoaByAdapter.set(adapter, (r.result as string).toLowerCase());
+      } else {
+        // Revert — keep the order with owner null (upstream behaviour).
+        log("warn", "scanAaveSettlement:readOwner_failed", { chainId, owner: adapter });
+        eoaByAdapter.set(adapter, null);
+      }
+      typeByAdapter.set(adapter, codes[i] ? detectFlashLoanOrderType(codes[i]!) : null);
+    }
+
     const candidates: AaveSettlementCandidate[] = [];
-
-    for (const txLog of receipt.logs) {
-      if (txLog.address.toLowerCase() !== settlementAddress) continue;
-      if (txLog.topics[0] !== TRADE_TOPIC) continue;
-
-      const owner = `0x${txLog.topics[1]!.slice(26)}` as `0x${string}`;
-      const ownerAddress = owner.toLowerCase() as `0x${string}`;
-
-      let code: `0x${string}` | undefined;
-      try {
-        code = await withTimeout(
-          client.getCode({ address: owner }),
-          SETTLEMENT_INNER_RPC_TIMEOUT_MS,
-          "scanAaveSettlement:getCode",
-        );
-      } catch (err) {
-        log("warn", "scanAaveSettlement:getCode_failed", { chainId, owner, err: err instanceof Error ? err.message : String(err) });
-        throw new SettlementScanUnavailableError("getCode", err); // transport — retry the whole scan
-      }
-      if (!code || code === "0x") continue; // EOA — not an adapter
-
-      let factoryData: `0x${string}` | undefined;
-      try {
-        const result = await withTimeout(
-          client.call({ to: owner, data: FACTORY_SELECTOR }),
-          SETTLEMENT_INNER_RPC_TIMEOUT_MS,
-          "scanAaveSettlement:call:FACTORY",
-        );
-        factoryData = result.data;
-      } catch (err) {
-        if (isTransportError(err)) {
-          throw new SettlementScanUnavailableError("FACTORY", err); // retryable
-        }
-        continue; // reverted — not an adapter
-      }
-
-      if (!factoryData || factoryData.length < 66) continue;
-
-      const factoryAddress = `0x${factoryData.slice(26)}` as `0x${string}`;
-      if (factoryAddress.toLowerCase() !== adapterFactoryAddress) continue;
+    for (const txLog of tradeLogs) {
+      const ownerAddress = `0x${txLog.topics[1]!.slice(26)}`.toLowerCase() as `0x${string}`;
+      if (!adapterSet.has(ownerAddress)) continue;
 
       // Confirmed Aave adapter. Decode the Trade log data the topic-only read discarded.
       let trade;
       try {
         trade = decodeTradeData(txLog.data);
       } catch (err) {
-        log("warn", "scanAaveSettlement:decodeTrade_failed", { chainId, owner, err: err instanceof Error ? err.message : String(err) });
+        log("warn", "scanAaveSettlement:decodeTrade_failed", { chainId, owner: ownerAddress, err: err instanceof Error ? err.message : String(err) });
         continue;
-      }
-      const validTo = decodeValidToFromOrderUid(trade.orderUid);
-      // EIP-1167 implementation → adapter type, from the getCode result (no extra RPC).
-      const flashLoanType = detectFlashLoanOrderType(code);
-
-      // Resolve the EOA from the adapter's owner() — durable on-chain state that
-      // survives settlement (unlike getHookData(), whose struct is wiped).
-      let eoaOwner: string | null = null;
-      try {
-        const resolved = await withTimeout(
-          client.readContract({
-            address: owner,
-            abi: AaveV3AdapterHelperAbi,
-            functionName: "owner",
-          }),
-          BLOCK_HANDLER_RPC_TIMEOUT_MS,
-          "scanAaveSettlement:readContract:owner",
-        );
-        eoaOwner = (resolved as string).toLowerCase();
-      } catch (err) {
-        if (isTransportError(err)) {
-          throw new SettlementScanUnavailableError("owner", err); // retryable
-        }
-        // Revert — keep the order with owner null (upstream behaviour).
-        log("warn", "scanAaveSettlement:readOwner_failed", { chainId, owner, err: err instanceof Error ? err.message : String(err) });
       }
 
       candidates.push({
@@ -439,9 +439,9 @@ export const scanAaveSettlement = createEffect(
         sellAmount: trade.sellAmount.toString(),
         buyAmount: trade.buyAmount.toString(),
         feeAmount: trade.feeAmount.toString(),
-        validTo,
-        owner: eoaOwner,
-        type: flashLoanType,
+        validTo: decodeValidToFromOrderUid(trade.orderUid),
+        owner: eoaByAdapter.get(ownerAddress) ?? null,
+        type: typeByAdapter.get(ownerAddress) ?? null,
       });
     }
 
