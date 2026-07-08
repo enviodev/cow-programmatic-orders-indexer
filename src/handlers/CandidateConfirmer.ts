@@ -14,7 +14,7 @@ import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orde
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CandidateRow = any;
@@ -67,7 +67,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "CandidateConfirmer",
-      where: ({ chain }) => ({ block: { number: { _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

@@ -12,7 +12,7 @@ import { indexer } from "envio";
 import { scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
 import { persistAaveCandidates } from "../helpers/aaveSettlement.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, resolveCap, pollerActivationFloor } from "../helpers/blockHandlerShared.js";
 
 const DEFAULT_MAX_SCAN_RETRIES_PER_BLOCK = 10;
 const MAX_SCAN_ATTEMPTS = 50; // ~worst case: transient outages spanning hours
@@ -21,7 +21,7 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "FlashLoanScanRetrier",
-      where: ({ chain }) => ({ block: { number: { _every: blockHandlerInterval(chain.id) } } }),
+      where: ({ chain }) => ({ block: { number: { _gte: pollerActivationFloor(chain.id), _every: blockHandlerInterval(chain.id) } } }),
     },
     async ({ block, context }) => {
       const chainId = context.chain.id;

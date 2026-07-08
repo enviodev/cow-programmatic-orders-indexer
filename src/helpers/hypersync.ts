@@ -83,3 +83,17 @@ export async function hypersyncBlockTimestamp(
   }
   return null;
 }
+
+/** Current HyperSync chain height (fast, no RPC). */
+export async function hypersyncHeight(chainId: number): Promise<number> {
+  const token = process.env.ENVIO_API_TOKEN;
+  const response = await fetchWithTimeout(
+    `https://${chainId}.hypersync.xyz/height`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    HYPERSYNC_QUERY_TIMEOUT_MS,
+    "hypersync:height",
+  );
+  if (!response.ok) throw new Error(`hypersync height failed: HTTP ${response.status}`);
+  const body = (await response.json()) as { height: number };
+  return Number(body.height);
+}
