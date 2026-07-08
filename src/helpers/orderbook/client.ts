@@ -20,7 +20,6 @@ import {
 import { TimeoutError, withTimeout } from "../withTimeout.js";
 import { log } from "../logger.js";
 import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
-import { orderbookTerminalOrdersByUids } from "../../effects/orderbook.js";
 import {
   cacheFlashLoanEnrichment,
   cacheUidStatuses,
@@ -225,10 +224,6 @@ export async function fetchOrderStatusByUids(
   context: any,
   chainId: number,
   uids: string[],
-  // True when the batch is expected to be all-terminal (historical precompute,
-  // stale-candidate drains): tries the resync-persistent terminal cache first,
-  // falling back to the fresh path when any UID is absent/open.
-  expectTerminal = false,
 ): Promise<Map<string, OrderStatusInfo>> {
   const result = new Map<string, OrderStatusInfo>();
   if (uids.length === 0) return result;
@@ -253,57 +248,23 @@ export async function fetchOrderStatusByUids(
     }
   }
 
-  // Batch-fetch non-cached UIDs, capped at 2 × the per-request timeout.
+  // Batch-fetch non-cached UIDs (fetchOrdersByUids chunks at 50 and runs the
+  // chunks in parallel under the shared HTTP semaphore), capped at 2 x the
+  // per-request timeout. Terminal results are memoized in OrderUidCache below.
   if (toFetch.length > 0) {
-    const fetched: OrderbookOrder[] = [];
-    let fallbackUids: string[] = toFetch;
-
-    if (expectTerminal) {
-      // Envio uses the serialized effect input as the cache table's PRIMARY
-      // KEY — btree v4 caps index tuples at 2704 bytes, so chunk the uidsJson
-      // to ~2KB (16 UIDs × ~120B). Chunking also improves hit granularity:
-      // one open UID only takes its own chunk down the fresh path.
-      const TERMINAL_CHUNK = 16;
-      const chunks: string[][] = [];
-      for (let i = 0; i < toFetch.length; i += TERMINAL_CHUNK) {
-        chunks.push(toFetch.slice(i, i + TERMINAL_CHUNK));
-      }
-      const chunkResults = await Promise.all(
-        chunks.map(async (chunk) => {
-          try {
-            const json = await context.effect(orderbookTerminalOrdersByUids, {
-              chainId,
-              uidsJson: JSON.stringify(chunk),
-            });
-            return JSON.parse(json) as OrderbookOrder[];
-          } catch {
-            return null; // some UID absent/open — this chunk takes the fresh path
-          }
-        }),
+    let fetched: OrderbookOrder[];
+    try {
+      fetched = await withTimeout(
+        fetchOrdersByUids(context, chainId, toFetch),
+        ORDERBOOK_HTTP_TIMEOUT_MS * 2,
+        "ob:statusByUids",
       );
-      fallbackUids = [];
-      chunkResults.forEach((r, i) => {
-        if (r) fetched.push(...r);
-        else fallbackUids.push(...chunks[i]!);
-      });
-    }
-
-    if (fallbackUids.length > 0) {
-      try {
-        fetched.push(...await withTimeout(
-          fetchOrdersByUids(context, chainId, fallbackUids),
-          ORDERBOOK_HTTP_TIMEOUT_MS * 2,
-          "ob:statusByUids",
-        ));
-      } catch (err) {
-        if (err instanceof TimeoutError) {
-          // Proceed with whatever the terminal chunks yielded — callers treat
-          // missing UIDs as "not on API yet" and retry later.
-          log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: fallbackUids.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
-        } else {
-          throw err;
-        }
+    } catch (err) {
+      if (err instanceof TimeoutError) {
+        log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
+        return result; // cache-only map — caller treats missing UIDs as "not on API yet"
       }
+      throw err;
     }
 
     const newTerminal: ComposableOrder[] = [];
