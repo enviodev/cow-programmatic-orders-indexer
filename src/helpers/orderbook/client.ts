@@ -259,11 +259,11 @@ export async function fetchOrderStatusByUids(
     let fallbackUids: string[] = toFetch;
 
     if (expectTerminal) {
-      // Envio indexes effect inputs in Postgres (btree row cap 8191 bytes) —
-      // chunk the uidsJson so each cached input stays well under the limit.
-      // Chunking also improves hit granularity: one open UID only takes its
-      // own chunk down the fresh path.
-      const TERMINAL_CHUNK = 40;
+      // Envio uses the serialized effect input as the cache table's PRIMARY
+      // KEY — btree v4 caps index tuples at 2704 bytes, so chunk the uidsJson
+      // to ~2KB (16 UIDs × ~120B). Chunking also improves hit granularity:
+      // one open UID only takes its own chunk down the fresh path.
+      const TERMINAL_CHUNK = 16;
       const chunks: string[][] = [];
       for (let i = 0; i < toFetch.length; i += TERMINAL_CHUNK) {
         chunks.push(toFetch.slice(i, i + TERMINAL_CHUNK));
