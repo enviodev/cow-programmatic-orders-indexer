@@ -125,19 +125,10 @@ async function drainOwnerBatch(
 }
 
 if (!isTest) {
-  // Historical: coarse stride during the event backfill (before realtime).
-  indexer.onBlock(
-    {
-      name: "OwnerBackfill",
-      where: () => ({ block: { number: { _every: 250 } } }),
-    },
-    async ({ block, context }) => {
-      if (context.chain.isRealtime) return; // endBlock "latest" upstream — live twin takes over
-      await drainOwnerBatch(block, context, "historical");
-    },
-  );
-
-  // Live: fine per-chain stride from the tip onward.
+  // Tip-only drain (upstream fc746d8): the historical registration interleaved
+  // orderbook I/O with the event backfill and dragged out the path to synced.
+  // Coverage is unchanged — historical non-deterministic generators keep
+  // historyBackfilled=false and are drained once sync reaches the tip.
   indexer.onBlock(
     {
       name: "OwnerBackfillLive",
