@@ -10,7 +10,25 @@
 
 import { fetchWithTimeout } from "./withTimeout.js";
 
-const HYPERSYNC_QUERY_TIMEOUT_MS = 10_000;
+const HYPERSYNC_QUERY_TIMEOUT_MS = 20_000;
+
+/** Concurrency cap for effect-side HyperSync queries — they share capacity
+ *  with the indexer's own event stream, and unbounded concurrent /query calls
+ *  produce queueing timeouts (same stampede mode as any HTTP dependency). */
+const MAX_HYPERSYNC_CONCURRENCY = 10;
+let slotsFree = MAX_HYPERSYNC_CONCURRENCY;
+const waiters: Array<() => void> = [];
+
+async function acquireSlot(): Promise<void> {
+  if (slotsFree > 0) { slotsFree--; return; }
+  await new Promise<void>((resolve) => waiters.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waiters.shift();
+  if (next) next();
+  else slotsFree++;
+}
 
 export interface HypersyncLog {
   transaction_hash: string;
@@ -23,6 +41,16 @@ export interface HypersyncLog {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function hypersyncQuery(chainId: number, body: Record<string, unknown>): Promise<any> {
+  await acquireSlot();
+  try {
+    return await hypersyncQueryInner(chainId, body);
+  } finally {
+    releaseSlot();
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function hypersyncQueryInner(chainId: number, body: Record<string, unknown>): Promise<any> {
   const token = process.env.ENVIO_API_TOKEN;
   const response = await fetchWithTimeout(
     `https://${chainId}.hypersync.xyz/query`,

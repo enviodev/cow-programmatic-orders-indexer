@@ -307,9 +307,10 @@ export const scanAaveSettlement = createEffect(
     input: S.schema({ chainId: S.number, txHash: S.string, blockNumber: S.number }),
     output: S.string, // JSON-serialized AaveSettlementCandidate[]
     cache: true, // mined-tx analysis is immutable; failures THROW so only successes cache
-    // Generous: each scan is 1 HyperSync query + 1 multicall (transport-batched),
-    // and failures defer to FlashLoanScanRetrier rather than being lost.
-    rateLimit: { calls: 100, per: "second" as const },
+    // Admission shaped to the HyperSync-side concurrency cap (10 slots at
+    // ~150ms/query); failures defer to FlashLoanScanRetrier rather than
+    // being lost.
+    rateLimit: { calls: 20, per: "second" as const },
   },
   async ({ input }): Promise<string> => {
     const { chainId, txHash, blockNumber } = input;
