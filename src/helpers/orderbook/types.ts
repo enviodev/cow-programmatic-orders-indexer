@@ -93,4 +93,6 @@ export interface CachedOrderData {
 
 export const TERMINAL_STATUSES = new Set(["fulfilled", "expired", "cancelled"]);
 export const PAGE_LIMIT = 1000;
-export const BATCH_SIZE = 50;
+// Empirically verified against api.cow.fi: 100 UIDs per by_uids POST is the
+// maximum (200 returns HTTP 413). Bigger batches halve the request count.
+export const BATCH_SIZE = 100;
