@@ -61,14 +61,24 @@ export const ORDERBOOK_HTTP_TIMEOUT_MS = 10_000;
 
 /**
  * Bounded retry for transient orderbook failures (HTTP 429 / 5xx).
- * The loop adds at most ORDERBOOK_RETRY_BUDGET_MS of wall-clock; if a
- * `Retry-After` (or backoff) would exceed the budget, fail fast and let the
- * next poll retry naturally.
+ *
+ * Upstream caps a single sleep at 2s / 4s total because ponder block handlers
+ * hold a Postgres transaction open across the call. Envio effects hold
+ * nothing, so we can honor api.cow.fi's actual Retry-After (observed: 30s
+ * penalties) — retrying inside the penalty window just earns another 429.
+ * The shared HTTP semaphore turns these sleeps into natural backpressure.
  */
-export const ORDERBOOK_MAX_RETRIES = 2; // ≤ 3 attempts total
+export const ORDERBOOK_MAX_RETRIES = 5;
 export const ORDERBOOK_RETRY_BASE_MS = 250; // exponential backoff base
-export const ORDERBOOK_RETRY_MAX_DELAY_MS = 2_000; // cap on a single sleep (incl. Retry-After)
-export const ORDERBOOK_RETRY_BUDGET_MS = 4_000; // total wall-clock the retry loop may add
+export const ORDERBOOK_RETRY_MAX_DELAY_MS = 60_000; // cap on a single sleep (incl. Retry-After)
+export const ORDERBOOK_RETRY_BUDGET_MS = 120_000; // total wall-clock the retry loop may add
+
+/**
+ * Outer wall-clock cap for a whole batched status fetch — must accommodate
+ * the retry budget above (a batch honoring one 30s Retry-After is healthy,
+ * not hung).
+ */
+export const ORDERBOOK_BATCH_TIMEOUT_MS = ORDERBOOK_RETRY_BUDGET_MS + 2 * 10_000;
 
 /**
  * Hard wall-clock cap for a block handler's aggregate multicall

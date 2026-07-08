@@ -14,7 +14,7 @@
 import { type Hex } from "viem";
 import { ORDERBOOK_API_URLS } from "../../data.js";
 import {
-  ORDERBOOK_HTTP_TIMEOUT_MS,
+  ORDERBOOK_BATCH_TIMEOUT_MS,
   SIGNING_SCHEME_EIP1271,
 } from "../../constants.js";
 import { TimeoutError, withTimeout } from "../withTimeout.js";
@@ -256,12 +256,12 @@ export async function fetchOrderStatusByUids(
     try {
       fetched = await withTimeout(
         fetchOrdersByUids(context, chainId, toFetch),
-        ORDERBOOK_HTTP_TIMEOUT_MS * 2,
+        ORDERBOOK_BATCH_TIMEOUT_MS,
         "ob:statusByUids",
       );
     } catch (err) {
       if (err instanceof TimeoutError) {
-        log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
+        log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_BATCH_TIMEOUT_MS });
         return result; // cache-only map — caller treats missing UIDs as "not on API yet"
       }
       throw err;
@@ -359,12 +359,12 @@ export async function fetchFlashLoanEnrichmentByUids(
   try {
     fetched = await withTimeout(
       fetchOrdersByUids(context, chainId, toFetch),
-      ORDERBOOK_HTTP_TIMEOUT_MS * 2,
+      ORDERBOOK_BATCH_TIMEOUT_MS,
       "ob:flashLoanByUids",
     );
   } catch (err) {
     if (err instanceof TimeoutError) {
-      log("warn", "ob:flashLoanByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_HTTP_TIMEOUT_MS * 2 });
+      log("warn", "ob:flashLoanByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_BATCH_TIMEOUT_MS });
       return result; // cache-only — caller treats missing UIDs as "not on API yet"
     }
     throw err;

@@ -8,7 +8,7 @@ import { indexer } from "envio";
 import type { Hex } from "viem";
 import {
   BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
-  ORDERBOOK_HTTP_TIMEOUT_MS,
+  ORDERBOOK_BATCH_TIMEOUT_MS,
 } from "../constants.js";
 import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
@@ -104,7 +104,7 @@ if (!isTest) {
           try {
             preflightStatuses = await withTimeout(
               fetchOrderStatusByUids(context, chainId, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
-              ORDERBOOK_HTTP_TIMEOUT_MS * 2,
+              ORDERBOOK_BATCH_TIMEOUT_MS,
               "CandidateConfirmer:cascade:preflight",
             );
           } catch {
