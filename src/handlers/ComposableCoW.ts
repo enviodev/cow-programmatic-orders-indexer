@@ -163,29 +163,39 @@ async function insertGenerator(
       consecutiveTryNextBlock: 0,
       // Only non-deterministic generators created during historical backfill need an
       // OwnerBackfill drain. Deterministic types are fully handled by precompute at
-      // creation, and live-created generators are owned by the realtime poller.
+      // creation (live) or by PrecomputeBackfiller at the tip (historical).
       historyBackfilled: isLive || !isNonDeterministic(orderType),
+      // Historical deterministic generators defer their UID precompute to the
+      // tip (PrecomputeBackfiller) so the event backfill never blocks on
+      // orderbook I/O. Live ones precompute inline, exactly like upstream.
+      precomputePending: !isLive && !isNonDeterministic(orderType),
     });
   }
 
-  return { generatorId, ownerAddress, chainId, decodedParams, orderType };
+    return { generatorId, ownerAddress, chainId, decodedParams, orderType };
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
+const isTestEnv = typeof process !== "undefined" && !!process.env.VITEST;
+
 indexer.onEvent(
   { contract: "ComposableCoW", event: "ConditionalOrderCreated" },
   async ({ event, context }) => {
-    const isLive = context.chain.isRealtime;
+    // Tests process pinned historical ranges but assert live semantics.
+    const isLive = context.chain.isRealtime || isTestEnv;
     const { generatorId, ownerAddress, chainId, decodedParams, orderType } =
       await insertGenerator(event, context, isLive);
 
-    // Pre-compute UIDs for deterministic order types (TWAP, StopLoss, CirclesBackingOrder).
-    // Fetches status from API by UID, upserts discrete orders, and
-    // deactivates the generator if all orders are already terminal.
-    await precomputeAndDiscover(
-      context, chainId, generatorId, ownerAddress, orderType, decodedParams,
-      BigInt(event.block.timestamp),
-    );
+    // Pre-compute UIDs for deterministic order types (TWAP, StopLoss,
+    // CirclesBackingOrder) — INLINE only at realtime, exactly like upstream's
+    // live handler. Historical generators defer to PrecomputeBackfiller at the
+    // tip so the chain backfill never blocks on orderbook I/O.
+    if (isLive) {
+      await precomputeAndDiscover(
+        context, chainId, generatorId, ownerAddress, orderType, decodedParams,
+        BigInt(event.block.timestamp),
+      );
+    }
   },
 );

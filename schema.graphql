@@ -89,6 +89,7 @@ type ConditionalOrderGenerator {
   nextCheckTimestamp: BigInt @index # for PollTryAtEpoch — store epoch directly
   consecutiveTryNextBlock: Int! # backoff counter for stuck generators
   historyBackfilled: Boolean! @index # OwnerBackfill has drained this generator's full /account history
+  precomputePending: Boolean! @index # deterministic generator created during backfill; PrecomputeBackfiller runs its UID precompute at the tip
   discreteOrders: [DiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
   candidateDiscreteOrders: [CandidateDiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
 }
