@@ -49,7 +49,16 @@ if (!isTest) {
       const ts = await blockTimestamp(context, block);
       let done = 0;
 
+      // Wall-clock budget per firing: under orderbook 429 penalties a single
+      // status fetch can legitimately take 30-60s, and an unbounded loop over
+      // the batch holds the whole processing batch (and every DB flush) open
+      // for tens of minutes. Stop early and leave the rest pending — the next
+      // firing resumes.
+      const FIRING_BUDGET_MS = 45_000;
+      const start = Date.now();
+
       for (const gen of batch) {
+        if (Date.now() - start > FIRING_BUDGET_MS) break;
         await precomputeAndDiscover(
           context,
           chainId,
@@ -68,7 +77,7 @@ if (!isTest) {
       }
 
       if (!context.isPreload) {
-        log("info", "PrecomputeBackfiller:DONE", { block: String(block.number), chainId, pending: pending.length, done });
+        log("info", "PrecomputeBackfiller:DONE", { block: String(block.number), chainId, pending: pending.length, done, budgetMs: Date.now() - start });
       }
     },
   );
