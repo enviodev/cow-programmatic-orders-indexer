@@ -50,7 +50,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  */
 const MAX_ORDERBOOK_CONCURRENCY = Number(process.env.ORDERBOOK_CONCURRENCY) > 0
   ? Number(process.env.ORDERBOOK_CONCURRENCY)
-  : 10;
+  : 6;
 let httpSlotsFree = MAX_ORDERBOOK_CONCURRENCY;
 const httpSlotWaiters: Array<() => void> = [];
 
@@ -254,9 +254,9 @@ export const orderbookAccountOrders = createEffect(
     }),
     output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
     cache: false, // statuses change over time
-    // Account pages are heavy (up to 3.6MB); keep admission low and let the
-    // shared semaphore + Retry-After handling pace the drain.
-    rateLimit: { calls: 3, per: "second" as const },
+    // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint.
+    // Account pages are heavy (up to 3.6MB), so stay well under: 40/min.
+    rateLimit: { calls: 40, per: "minute" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
@@ -378,12 +378,11 @@ export const orderbookOrdersByUids = createEffect(
     input: S.schema({ chainId: S.number, uidsJson: S.string }),
     output: S.string, // JSON OrderbookOrder[]
     cache: false, // statuses change over time; terminal results are cached in OrderUidCache
-    // Admission ~= sustainable service rate. api.cow.fi hands out 30s
-    // Retry-After penalties under load; admitting faster than the API serves
-    // just parks calls in-flight (observed: 918 active). 5/s x 100-UID
-    // batches = 500 uids/s steady — the whole backfill's ~340k statuses in
-    // ~12 min without tripping the limiter.
-    rateLimit: { calls: 5, per: "second" as const },
+    // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint
+    // (docs.cow.fi rate-limits reference; exceeding it triggers 429s and a
+    // Cloudflare escalation with 30s penalties). 80/min leaves headroom.
+    // At 100 UIDs per request that is still 8,000 statuses/min.
+    rateLimit: { calls: 80, per: "minute" as const },
   },
   async ({ input }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];

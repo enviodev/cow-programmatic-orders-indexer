@@ -38,7 +38,17 @@ pnpm test             # unit + integration tests (integration needs network)
   pollers no-op gracefully (event indexing still works via HyperSync).
 - Optional caps: `MAX_GENERATORS_PER_BLOCK_<chainId>`, `MAX_DISCRETE_ORDERS_PER_BLOCK_<chainId>`,
   `MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>`, `MAX_FLASH_LOAN_ORDERS_PER_BLOCK_<chainId>`,
-  `DISABLE_SETTLEMENT_FACTORY_CHECK`.
+  `MAX_PRECOMPUTES_PER_BLOCK_<chainId>`, `MAX_SCAN_RETRIES_PER_BLOCK_<chainId>`,
+  `ORDERBOOK_CONCURRENCY`, `POLLER_FLOOR_FROM_HEAD=1` (skip historical poller firings),
+  `POLLER_ACTIVATION_BLOCK_<chainId>`, `DISABLE_SETTLEMENT_FACTORY_CHECK`.
+
+## CoW Orderbook API budget
+
+api.cow.fi enforces ~100 requests/minute per IP per read endpoint (documented),
+with a Cloudflare layer that escalates sustained abuse to 30s+ penalties. The
+effects encode this: `by_uids` 80/min (×100 UIDs/request), `account` 40/min,
+plus a shared concurrency semaphore and full `Retry-After` honoring. For
+elevated limits CoW suggests contacting bd@cow.fi.
 
 ## Deviations from upstream (by necessity)
 
