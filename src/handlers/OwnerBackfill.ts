@@ -36,6 +36,10 @@ async function drainOwnerBatch(
   context: any,
   phase: "historical" | "live",
 ): Promise<void> {
+  // Ops escape hatch: the /account drain is the heaviest consumer of the
+  // orderbook's per-IP budget; disable it on hosts whose IP is rate-penalized
+  // and run it elsewhere (the historyBackfilled flags keep the backlog).
+  if (process.env.DISABLE_OWNER_BACKFILL === "1") return;
   const chainId = context.chain.id;
   const currentBlock = BigInt(block.number);
   const cap = resolveCap(
