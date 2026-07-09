@@ -9,7 +9,7 @@ import { DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK } from "../constants.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
 const VALID_DISCRETE_STATUSES = new Set(["fulfilled", "unfilled", "expired", "cancelled"]);
 
@@ -30,9 +30,12 @@ if (!isTest) {
         DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK,
       );
 
+      // Bounded scan: one orderUid-nibble bucket of open orders per firing.
+      const bucket = nextHexBucket(`ost:${chainId}`);
       const allOpen = await context.DiscreteOrder.getWhere({
         chainId: { _eq: chainId },
         status: { _eq: "Open" },
+        orderUid: bucket,
       });
       // Oldest-promoted first (upstream ORDER BY promotedAt ASC — nulls last in PG).
       const openOrders = allOpen
@@ -68,38 +71,30 @@ if (!isTest) {
         }
       }
 
-      // Parent-cancelled cascade: any open discrete order whose parent generator
-      // is Cancelled and whose API state is non-terminal should be cancelled from
-      // on-chain truth. The API loop above already applied API-terminal statuses,
-      // so what remains status=Open here is exactly the "API silent" set.
-      const cancelledGenerators = await context.ConditionalOrderGenerator.getWhere({
-        chainId: { _eq: chainId },
-        status: { _eq: "Cancelled" },
-      });
-      const cancelledGeneratorIds = new Set<string>(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        cancelledGenerators.map((g: any) => g.id),
-      );
-
-      if (cancelledGeneratorIds.size > 0) {
-        const stillOpen = await context.DiscreteOrder.getWhere({
-          chainId: { _eq: chainId },
-          status: { _eq: "Open" },
-        });
-        for (const order of stillOpen) {
-          if (!cancelledGeneratorIds.has(order.conditionalOrderGenerator_id)) continue;
-          context.DiscreteOrder.set({ ...order, status: "Cancelled" });
-        }
-      }
-
-      // Expire orders past validTo
-      const expirable = await context.DiscreteOrder.getWhere({
+      // Parent-cancelled cascade: any open discrete order (in this bucket)
+      // whose parent generator is Cancelled and whose API state is
+      // non-terminal should be cancelled from on-chain truth. Generators
+      // resolve via batched .get — no all-cancelled-generators table scan.
+      const stillOpen = await context.DiscreteOrder.getWhere({
         chainId: { _eq: chainId },
         status: { _eq: "Open" },
-        validTo: { _lte: currentTimestamp },
+        orderUid: bucket,
       });
-      for (const order of expirable) {
-        context.DiscreteOrder.set({ ...order, status: "Expired" });
+      const gens = await Promise.all(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stillOpen.map((o: any) => context.ConditionalOrderGenerator.get(o.conditionalOrderGenerator_id)),
+      );
+      for (let i = 0; i < stillOpen.length; i++) {
+        const order = stillOpen[i];
+        if (!order) continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const gen = gens[i] as any;
+        if (gen && gen.status === "Cancelled") {
+          context.DiscreteOrder.set({ ...order, status: "Cancelled" });
+        } else if (order.validTo != null && order.validTo <= currentTimestamp) {
+          // Expire orders past validTo (same bucket).
+          context.DiscreteOrder.set({ ...order, status: "Expired" });
+        }
       }
     },
   );

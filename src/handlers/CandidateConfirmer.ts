@@ -14,7 +14,7 @@ import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orde
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CandidateRow = any;
@@ -75,74 +75,74 @@ if (!isTest) {
       const chainId = context.chain.id;
       const currentTimestamp = await blockTimestamp(context, block);
 
+      // Bounded scan: one orderUid-nibble bucket of candidates per firing
+      // (~1/16 of the table). Parent generators resolve via batched .get —
+      // no all-cancelled-generators table scan.
+      const bucket = nextHexBucket(`candconf:${chainId}`);
+      const candidates = await context.CandidateDiscreteOrder.getWhere({
+        chainId: { _eq: chainId },
+        orderUid: bucket,
+      });
+      if (candidates.length === 0) return;
+
+      const generators = await Promise.all(
+        candidates.map((c: CandidateRow) =>
+          context.ConditionalOrderGenerator.get(c.conditionalOrderGenerator_id),
+        ),
+      );
+      const genById = new Map<string, unknown>();
+      candidates.forEach((c: CandidateRow, i: number) => genById.set(c.conditionalOrderGenerator_id, generators[i]));
+
       // Parent-cancelled cascade: candidates whose parent generator flipped to
       // Cancelled never hit the orderbook, so skip the API and promote them
       // directly to DiscreteOrder as cancelled (with a /by_uids preflight).
-      const cancelledGenerators = await context.ConditionalOrderGenerator.getWhere({
-        chainId: { _eq: chainId },
-        status: { _eq: "Cancelled" },
-      });
-      const cancelledGeneratorIds = new Set<string>(
+      const orphanCandidates = candidates.filter((c: CandidateRow) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        cancelledGenerators.map((g: any) => g.id),
-      );
+        const g = genById.get(c.conditionalOrderGenerator_id) as any;
+        return g && g.status === "Cancelled";
+      });
 
-      if (cancelledGeneratorIds.size > 0) {
-        const allCandidates = await context.CandidateDiscreteOrder.getWhere({
-          chainId: { _eq: chainId },
-        });
-        const orphanCandidates = allCandidates.filter((c: CandidateRow) =>
-          cancelledGeneratorIds.has(c.conditionalOrderGenerator_id),
-        );
+      if (orphanCandidates.length > 0) {
+        let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>>;
+        try {
+          preflightStatuses = await withTimeout(
+            fetchOrderStatusByUids(context, chainId, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
+            ORDERBOOK_BATCH_TIMEOUT_MS,
+            "CandidateConfirmer:cascade:preflight",
+          );
+        } catch {
+          preflightStatuses = new Map();
+        }
 
-        if (orphanCandidates.length > 0) {
-          // Preflight /by_uids before writing cancelled. A candidate could have
-          // been posted by the watch-tower and filled/expired between generator
-          // creation and the cascade. Fall back to 'cancelled' for UIDs not on
-          // the orderbook. Degrades gracefully on timeout (empty map).
-          let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>>;
-          try {
-            preflightStatuses = await withTimeout(
-              fetchOrderStatusByUids(context, chainId, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
-              ORDERBOOK_BATCH_TIMEOUT_MS,
-              "CandidateConfirmer:cascade:preflight",
-            );
-          } catch {
-            preflightStatuses = new Map();
-          }
+        for (const c of orphanCandidates) {
+          const apiEntry = preflightStatuses.get(c.orderUid);
+          await promoteCandidate(
+            context, chainId, c,
+            apiEntry?.status ?? "cancelled",
+            apiEntry?.executedSellAmount ?? null,
+            apiEntry?.executedBuyAmount ?? null,
+            currentTimestamp,
+            true, // onConflictDoNothing — an existing terminal row wins
+          );
+          context.CandidateDiscreteOrder.deleteUnsafe(c.id);
+        }
 
-          for (const c of orphanCandidates) {
-            const apiEntry = preflightStatuses.get(c.orderUid);
-            await promoteCandidate(
-              context, chainId, c,
-              apiEntry?.status ?? "cancelled",
-              apiEntry?.executedSellAmount ?? null,
-              apiEntry?.executedBuyAmount ?? null,
-              currentTimestamp,
-              true, // onConflictDoNothing — an existing terminal row wins
-            );
-            context.CandidateDiscreteOrder.deleteUnsafe(c.id);
-          }
-
-          if (!context.isPreload) {
-            log("info", "CandidateConfirmer:parent_cancelled", { block: String(block.number), chainId, parentCancelled: orphanCandidates.length, preflightKnown: preflightStatuses.size });
-          }
+        if (!context.isPreload) {
+          log("info", "CandidateConfirmer:parent_cancelled", { block: String(block.number), chainId, parentCancelled: orphanCandidates.length, preflightKnown: preflightStatuses.size });
         }
       }
 
-      // Unconfirmed candidates: skip TWAP parts whose validity window hasn't
-      // started (possibleValidAfterTimestamp) and already-expired candidates
-      // (the stale path below handles those via /account fallback).
-      const candidates = await context.CandidateDiscreteOrder.getWhere({
-        chainId: { _eq: chainId },
-      });
+      // Unconfirmed candidates in this bucket: skip TWAP parts whose validity
+      // window hasn't started and already-expired candidates (stale path below).
+      const orphanIds = new Set(orphanCandidates.map((c: CandidateRow) => c.id));
       const unconfirmed = candidates.filter(
         (c: CandidateRow) =>
+          !orphanIds.has(c.id) &&
           (c.possibleValidAfterTimestamp == null || c.possibleValidAfterTimestamp <= currentTimestamp) &&
           (c.validTo == null || c.validTo > currentTimestamp),
       );
 
-      if (unconfirmed.length === 0) return;
+      if (unconfirmed.length === 0) return;      if (unconfirmed.length === 0) return;
 
       const uids = unconfirmed.map((c: CandidateRow) => c.orderUid);
       const statuses = await fetchOrderStatusByUids(context, chainId, uids);
@@ -166,10 +166,10 @@ if (!isTest) {
 
       // Promote expired candidates — a final API check so submitted-but-expired
       // orders land in DiscreteOrder rather than disappearing silently.
-      const staleAll = await context.CandidateDiscreteOrder.getWhere({
-        chainId: { _eq: chainId },
-        validTo: { _lte: currentTimestamp },
-      });
+      const staleAll = candidates.filter(
+        (c: CandidateRow) =>
+          !orphanIds.has(c.id) && c.validTo != null && c.validTo <= currentTimestamp,
+      );
       const stale = staleAll.slice(0, 500);
 
       if (stale.length > 0) {

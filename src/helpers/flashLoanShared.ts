@@ -17,11 +17,14 @@ export async function selectPendingFlashLoanOrders(
   context: any,
   chainId: number,
   limit?: number,
+  // Bounded scan: restrict to one orderUid range bucket (see nextHexBucket).
+  uidRange?: { _gte: string; _lt: string },
 ): Promise<PendingFlashLoanRow[]> {
   const pending = await context.FlashLoanOrder.getWhere({
     chainId: { _eq: chainId },
     enriched: { _eq: false },
     enrichmentAttempts: { _lt: MAX_FLASH_LOAN_ENRICHMENT_ATTEMPTS },
+    ...(uidRange ? { orderUid: uidRange } : {}),
   });
   const sorted = pending.sort(
     (a: PendingFlashLoanRow, b: PendingFlashLoanRow) => Number(a.blockNumber - b.blockNumber),

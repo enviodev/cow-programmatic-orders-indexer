@@ -12,7 +12,7 @@
 
 import { indexer } from "envio";
 import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { log } from "../helpers/logger.js";
 import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
@@ -34,9 +34,12 @@ if (!isTest) {
         DEFAULT_MAX_PRECOMPUTES_PER_BLOCK,
       );
 
+      // Bounded scan: one hash-nibble bucket per firing (~1/16 of pending).
+      const bucket = nextHexBucket(`precompute:${chainId}`);
       const pending = await context.ConditionalOrderGenerator.getWhere({
         chainId: { _eq: chainId },
         precomputePending: { _eq: true },
+        hash: bucket,
       });
       if (pending.length === 0) return;
 

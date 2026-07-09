@@ -25,7 +25,7 @@ import {
 import { fetchComposableOrders, upsertDiscreteOrders } from "../helpers/orderbook/client.js";
 import { TimeoutError, withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { NON_DETERMINISTIC_TYPES } from "../utils/order-types.js";
 
 // Shared drain — registered for both the historical and live block handlers below.
@@ -47,14 +47,16 @@ async function drainOwnerBatch(
     DEFAULT_MAX_OWNERS_BACKFILL_PER_BLOCK,
   );
 
+  // Bounded scan: one hash-nibble bucket per firing (~1/16 of the backlog).
   const eligible = await context.ConditionalOrderGenerator.getWhere({
     chainId: { _eq: chainId },
     status: { _eq: "Active" },
     orderType: { _in: [...NON_DETERMINISTIC_TYPES] },
     historyBackfilled: { _eq: false },
+    hash: nextHexBucket(`ownerdrain:${chainId}`),
   });
 
-  if (eligible.length === 0) return; // nothing pending — cheap no-op
+  if (eligible.length === 0) return; // nothing pending in this bucket — cheap no-op
 
   // Take up to `cap` distinct owners this block; ordering by owner keeps
   // progress deterministic and lets already-drained owners fall out of the set.

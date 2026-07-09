@@ -15,7 +15,7 @@ import {
   FLASH_LOAN_BACKFILL_SLICE_SIZE,
 } from "../constants.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { selectPendingFlashLoanOrders, enrichFlashLoanOrders } from "../helpers/flashLoanShared.js";
 
 // One-shot backfill guard, per chain per process (upstream achieves this with
@@ -69,7 +69,9 @@ if (!isTest) {
         DEFAULT_MAX_FLASH_LOAN_ORDERS_PER_BLOCK,
       );
 
-      const pending = await selectPendingFlashLoanOrders(context, chainId, maxPerBlock);
+      const pending = await selectPendingFlashLoanOrders(
+        context, chainId, maxPerBlock, nextHexBucket(`flenrich:${chainId}`),
+      );
       if (pending.length === 0) return;
 
       const { enriched, missing } = await enrichFlashLoanOrders(

@@ -119,3 +119,23 @@ export async function blockTimestamp(
   });
   return ts == null ? BigInt(Math.floor(Date.now() / 1000)) : BigInt(ts);
 }
+
+/**
+ * Bounded-scan bucket iterator. envio's getWhere has no LIMIT, so an
+ * unbounded predicate ("all pending rows") re-reads entire tables every
+ * firing — measured in the tens of thousands of rows during tip drains,
+ * enough to OOM a resource-capped hosted Postgres/indexer. Hex-keyed fields
+ * (orderUid, params hash) are uniformly distributed, so range-bucketing the
+ * first nibble caps each firing's read at ~1/16 of the table with full
+ * coverage every 16 firings.
+ */
+const bucketCounters = new Map<string, number>();
+
+export function nextHexBucket(key: string): { _gte: string; _lt: string } {
+  const n = (bucketCounters.get(key) ?? 0) % 16;
+  bucketCounters.set(key, n + 1);
+  const lo = "0x" + n.toString(16);
+  // Lexicographic upper bound; for the final bucket "0y" > any "0xf…".
+  const hi = n === 15 ? "0y" : "0x" + (n + 1).toString(16);
+  return { _gte: lo, _lt: hi };
+}
