@@ -48,7 +48,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * healthy: ~24 in flight sustains full throughput at normal ~100ms latency
  * without ever stampeding it.
  */
-const MAX_ORDERBOOK_CONCURRENCY = 10;
+const MAX_ORDERBOOK_CONCURRENCY = Number(process.env.ORDERBOOK_CONCURRENCY) > 0
+  ? Number(process.env.ORDERBOOK_CONCURRENCY)
+  : 10;
 let httpSlotsFree = MAX_ORDERBOOK_CONCURRENCY;
 const httpSlotWaiters: Array<() => void> = [];
 
