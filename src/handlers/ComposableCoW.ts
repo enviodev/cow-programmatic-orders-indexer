@@ -42,7 +42,6 @@ async function insertGenerator(
 ): Promise<{
   generatorId: string;
   ownerAddress: Hex;
-  chainId: number;
   decodedParams: Record<string, string> | null;
   orderType: OrderType;
 }> {

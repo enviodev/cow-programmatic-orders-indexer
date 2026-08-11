@@ -24,7 +24,6 @@ import {
 export async function filterAndProcess(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   apiOrders: OrderbookOrder[],
 ): Promise<ComposableOrder[]> {
   // First pass: decode signatures and compute param hashes. Thousands of a
@@ -66,7 +65,6 @@ export async function filterAndProcess(
   // Find the generators — exactly one per (chainId, hash).
   const uniqueHashes = [...new Set(decodedOrders.map((d) => d.paramHash))];
   const generators = await context.ConditionalOrderGenerator.getWhere({
-    chainId: { _eq: chainId },
     hash: { _in: uniqueHashes },
   });
   const generatorByHash = new Map<string, { id: string; orderType: string }>(
@@ -103,7 +101,6 @@ export async function filterAndProcess(
 export async function reconcileOpenCachedRows(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   rows: ComposableCacheRow[],
 ): Promise<ComposableCacheRow[]> {
@@ -136,14 +133,12 @@ export async function reconcileOpenCachedRows(
 export async function remapToCurrentGenerators(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   rows: ComposableCacheRow[],
 ): Promise<ComposableOrder[]> {
   if (rows.length === 0) return [];
   const hashes = [...new Set(rows.map((r) => r.generatorHash))];
 
   const generators = await context.ConditionalOrderGenerator.getWhere({
-    chainId: { _eq: chainId },
     hash: { _in: hashes },
   });
 
@@ -179,14 +174,12 @@ export async function remapToCurrentGenerators(
 export async function matchHistoryRowsToGenerators(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   rows: import("../../effects/orderbook.js").HistoryPageRow[],
 ): Promise<ComposableOrder[]> {
   if (rows.length === 0) return [];
 
   const uniqueHashes = [...new Set(rows.map((r) => r.paramHash))];
   const generators = await context.ConditionalOrderGenerator.getWhere({
-    chainId: { _eq: chainId },
     hash: { _in: uniqueHashes },
   });
   const generatorByHash = new Map<string, { id: string; orderType: string }>(

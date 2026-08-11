@@ -70,7 +70,7 @@ async function resolveActivationFloors(): Promise<Record<number, number>> {
         const height = await hypersyncHeight(chain.chainId);
         floors[chain.chainId] = Math.max(0, height - ACTIVATION_MARGIN_BLOCKS);
       } catch (err) {
-        log("warn", "pollerActivationFloor:height_failed", { chainId: chain.chainId, err: String(err) });
+        log("warn", "pollerActivationFloor:height_failed", { err: String(err) });
         floors[chain.chainId] = 0;
       }
     }),
@@ -114,7 +114,6 @@ export async function blockTimestamp(
 ): Promise<bigint> {
   const { getBlockTimestamp } = await import("../effects/rpc.js");
   const ts = await context.effect(getBlockTimestamp, {
-    chainId: context.chain.id,
     blockNumber: block.number,
   });
   return ts == null ? BigInt(Math.floor(Date.now() / 1000)) : BigInt(ts);

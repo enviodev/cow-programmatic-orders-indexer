@@ -40,7 +40,6 @@ export interface PrecomputedOrder {
  * Returns null if the order type is not deterministic or params are missing.
  */
 export function precomputeOrderUids(
-  chainId: number,
   owner: Hex,
   orderType: OrderType,
   decodedParams: Record<string, string> | null,
@@ -75,7 +74,6 @@ export function precomputeOrderUids(
 export async function precomputeAndDiscover(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   generatorId: string,
   owner: Hex,
   orderType: OrderType,
@@ -191,7 +189,6 @@ export async function precomputeAndDiscover(
  * time from composableCow.cabinet(owner, ctx). We use event.block.timestamp.
  */
 function precomputeTwapUids(
-  chainId: number,
   owner: Hex,
   params: Record<string, string>,
   blockTimestamp: bigint,
@@ -290,7 +287,6 @@ function precomputeTwapUids(
  *   - sellTokenBalance = buyTokenBalance = ERC20
  */
 function precomputeStopLossUid(
-  chainId: number,
   owner: Hex,
   params: Record<string, string>,
 ): PrecomputedOrder[] | null {
@@ -355,7 +351,6 @@ function precomputeStopLossUid(
  *     sellTokenBalance = buyTokenBalance = BALANCE_ERC20 (all contract constants).
  */
 function precomputeCirclesBackingOrderUid(
-  chainId: number,
   owner: Hex,
   params: Record<string, string>,
 ): PrecomputedOrder[] | null {

@@ -24,7 +24,6 @@ export interface ChainConfig {
   /** Chain key (e.g. "mainnet", "gnosis"). */
   name: string;
   /** EIP-155 chain ID. */
-  chainId: number;
   /** Approximate block time in seconds — used to derive poll cadences. */
   blockTime: number;
 

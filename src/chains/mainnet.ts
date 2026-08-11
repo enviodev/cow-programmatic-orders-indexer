@@ -4,7 +4,6 @@ const blockTime = 12;
 
 export const mainnet: ChainConfig = {
   name: "mainnet",
-  chainId: 1,
   blockTime,
   composableCow: {
     address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74",

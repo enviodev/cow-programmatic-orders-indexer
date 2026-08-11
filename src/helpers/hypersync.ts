@@ -40,7 +40,7 @@ export interface HypersyncLog {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function hypersyncQuery(chainId: number, body: Record<string, unknown>): Promise<any> {
+async function hypersyncQuery(body: Record<string, unknown>): Promise<any> {
   await acquireSlot();
   try {
     return await hypersyncQueryInner(chainId, body);
@@ -50,7 +50,7 @@ async function hypersyncQuery(chainId: number, body: Record<string, unknown>): P
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function hypersyncQueryInner(chainId: number, body: Record<string, unknown>): Promise<any> {
+async function hypersyncQueryInner(body: Record<string, unknown>): Promise<any> {
   const token = process.env.ENVIO_API_TOKEN;
   const response = await fetchWithTimeout(
     `https://${chainId}.hypersync.xyz/query`,
@@ -73,7 +73,6 @@ async function hypersyncQueryInner(chainId: number, body: Record<string, unknown
 
 /** All logs for (address, topic0) in a single block. */
 export async function hypersyncBlockLogs(
-  chainId: number,
   blockNumber: number,
   address: string,
   topic0: string,
@@ -93,7 +92,6 @@ export async function hypersyncBlockLogs(
 
 /** Block timestamp (Unix seconds) from the header, or null when unavailable. */
 export async function hypersyncBlockTimestamp(
-  chainId: number,
   blockNumber: number,
 ): Promise<number | null> {
   const result = await hypersyncQuery(chainId, {

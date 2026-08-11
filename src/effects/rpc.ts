@@ -80,7 +80,6 @@ export const checkOrdersActive = createEffect(
     input: S.schema({
       // JSON-serialized array of { owner, hash } objects
       ordersJson: S.string,
-      chainId: S.number,
     }),
     output: S.string, // JSON-serialized results
     cache: false, // On-chain state changes between blocks
@@ -114,7 +113,7 @@ export const checkOrdersActive = createEffect(
       );
     } catch (err) {
       if (err instanceof TimeoutError) {
-        log("warn", "checkOrdersActive:multicall_timeout", { chainId: input.chainId, due: orders.length });
+        log("warn", "checkOrdersActive:multicall_timeout", { due: orders.length });
         return "[]";
       }
       throw err;
@@ -182,7 +181,6 @@ export const pollTradeableOrders = createEffect(
   {
     name: "pollTradeableOrders",
     input: S.schema({
-      chainId: S.number,
       // JSON-serialized PollOrderInput[]
       ordersJson: S.string,
     }),
@@ -222,7 +220,7 @@ export const pollTradeableOrders = createEffect(
       );
     } catch (err) {
       if (err instanceof TimeoutError) {
-        log("warn", "pollTradeableOrders:multicall_timeout", { chainId: input.chainId, due: orders.length });
+        log("warn", "pollTradeableOrders:multicall_timeout", { due: orders.length });
         return JSON.stringify(orders.map(() => ({ status: "unavailable" })));
       }
       throw err;
@@ -304,7 +302,7 @@ export class SettlementScanUnavailableError extends Error {
 export const scanAaveSettlement = createEffect(
   {
     name: "scanAaveSettlement",
-    input: S.schema({ chainId: S.number, txHash: S.string, blockNumber: S.number }),
+    input: S.schema({ txHash: S.string, blockNumber: S.number }),
     output: S.string, // JSON-serialized AaveSettlementCandidate[]
     cache: true, // mined-tx analysis is immutable; failures THROW so only successes cache
     // Admission shaped to the HyperSync-side concurrency cap (10 slots at
@@ -456,7 +454,7 @@ export const scanAaveSettlement = createEffect(
 export const getBlockTimestamp = createEffect(
   {
     name: "getBlockTimestamp",
-    input: S.schema({ chainId: S.number, blockNumber: S.number }),
+    input: S.schema({ blockNumber: S.number }),
     output: S.union([S.number, null]),
     cache: true,
     rateLimit: { calls: 10, per: "second" as const },
@@ -491,7 +489,7 @@ export const getBlockTimestamp = createEffect(
 export const circlesImmutables = createEffect(
   {
     name: "circlesImmutables",
-    input: S.schema({ chainId: S.number, handler: S.string }),
+    input: S.schema({ handler: S.string }),
     output: S.union([S.string, null]), // JSON { sellToken, sellAmount } | null on failure
     cache: true, // contract immutables never change
     rateLimit: { calls: 5, per: "second" as const },
@@ -519,7 +517,7 @@ export const circlesImmutables = createEffect(
         sellAmount: sellAmount.toString(),
       });
     } catch (err) {
-      log("warn", "circlesImmutables:read_failed", { chainId: input.chainId, handler, err: String(err) });
+      log("warn", "circlesImmutables:read_failed", { handler, err: String(err) });
       return null;
     }
   },

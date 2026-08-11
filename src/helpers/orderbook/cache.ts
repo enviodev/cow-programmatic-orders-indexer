@@ -35,13 +35,12 @@ export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
   };
 }
 
-const uidCacheId = (chainId: number, uid: string): string => `${chainId}_${uid}`;
+const uidCacheId = (uid: string): string => `${chainId}_${uid}`;
 
 /** Read cached flash-loan enrichment for a list of UIDs. */
 export async function getCachedFlashLoanEnrichment(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   uids: string[],
 ): Promise<Map<string, FlashLoanEnrichment>> {
   const result = new Map<string, FlashLoanEnrichment>();
@@ -76,7 +75,6 @@ export async function getCachedFlashLoanEnrichment(
 export async function cacheFlashLoanEnrichment(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   entries: { uid: string; enrichment: FlashLoanEnrichment }[],
 ): Promise<void> {
   if (entries.length === 0) return;
@@ -109,7 +107,6 @@ export async function cacheFlashLoanEnrichment(
 export async function getCachedUidStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   uids: string[],
 ): Promise<Map<string, CachedOrderData>> {
   const result = new Map<string, CachedOrderData>();
@@ -134,7 +131,6 @@ export async function getCachedUidStatuses(
 export async function cacheUidStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   orders: ComposableOrder[],
 ): Promise<void> {
   if (orders.length === 0) return;
@@ -163,11 +159,9 @@ export async function cacheUidStatuses(
 export async function readOwnerBackfillCursor(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
 ): Promise<number | undefined> {
   const rows = await context.ComposableOrderCache.getWhere({
-    chainId: { _eq: chainId },
     owner: { _eq: owner.toLowerCase() },
   });
   if (rows.length === 0) return undefined;
@@ -182,11 +176,9 @@ export async function readOwnerBackfillCursor(
 export async function readOwnerComposableCache(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
 ): Promise<ComposableCacheRow[]> {
   const rows = await context.ComposableOrderCache.getWhere({
-    chainId: { _eq: chainId },
     owner: { _eq: owner.toLowerCase() },
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -209,7 +201,6 @@ export async function readOwnerComposableCache(
 export async function upsertComposableCache(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   rows: ComposableCacheRow[],
 ): Promise<void> {

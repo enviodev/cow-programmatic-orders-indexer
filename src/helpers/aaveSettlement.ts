@@ -10,7 +10,6 @@ import { log } from "./logger.js";
 export async function persistAaveCandidates(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   txHash: string,
   blockNumber: bigint,
   blockTimestamp: bigint,

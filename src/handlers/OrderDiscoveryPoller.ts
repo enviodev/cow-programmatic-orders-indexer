@@ -88,7 +88,6 @@ if (!isTest) {
       // Upstream: WHERE ... AND (nextCheckBlock <= cur OR nextCheckTimestamp <= ts).
       // getWhere is AND-only, so run the two branches separately and merge.
       const base = {
-        chainId: { _eq: chainId },
         status: { _eq: "Active" as const },
         allCandidatesKnown: { _eq: false },
       };

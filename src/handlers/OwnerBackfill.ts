@@ -49,7 +49,6 @@ async function drainOwnerBatch(
 
   // Bounded scan: one hash-nibble bucket per firing (~1/16 of the backlog).
   const eligible = await context.ConditionalOrderGenerator.getWhere({
-    chainId: { _eq: chainId },
     status: { _eq: "Active" },
     orderType: { _in: [...NON_DETERMINISTIC_TYPES] },
     historyBackfilled: { _eq: false },

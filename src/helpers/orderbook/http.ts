@@ -24,7 +24,6 @@ export { OrderbookUnavailableError };
 export async function fetchAccountHistoryPage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   startOffset: number,
   maxPages: number,
@@ -46,7 +45,6 @@ export async function fetchAccountHistoryPage(
 export async function fetchAccountOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   maxPages = 0,
   signingScheme?: string,
@@ -70,7 +68,6 @@ export async function fetchAccountOrders(
 export async function fetchOrdersByUids(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   uids: string[],
 ): Promise<OrderbookOrder[]> {
   if (uids.length === 0) return [];

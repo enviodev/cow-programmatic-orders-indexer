@@ -25,7 +25,6 @@ type CandidateRow = any;
 async function promoteCandidate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   candidate: CandidateRow,
   status: string,
   executedSellAmount: string | null,
@@ -80,7 +79,6 @@ if (!isTest) {
       // no all-cancelled-generators table scan.
       const bucket = nextHexBucket(`candconf:${chainId}`);
       const candidates = await context.CandidateDiscreteOrder.getWhere({
-        chainId: { _eq: chainId },
         orderUid: bucket,
       });
       if (candidates.length === 0) return;

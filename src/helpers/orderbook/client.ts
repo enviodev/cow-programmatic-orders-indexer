@@ -81,7 +81,6 @@ const DRAIN_PAGES_PER_FIRING = 3;
 export async function fetchComposableOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   // Epoch-ms deadline (cooperative): callers that race this promise against a
   // timeout pass the same deadline so the orphaned continuation stops BEFORE
@@ -177,7 +176,6 @@ export async function fetchComposableOrders(
 export async function upsertDiscreteOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   orders: ComposableOrder[],
 ): Promise<number> {
   if (orders.length === 0) return 0;
@@ -222,7 +220,6 @@ export async function upsertDiscreteOrders(
 export async function fetchOrderStatusByUids(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   uids: string[],
 ): Promise<Map<string, OrderStatusInfo>> {
   const result = new Map<string, OrderStatusInfo>();
@@ -309,7 +306,6 @@ export async function fetchOrderStatusByUids(
 export async function fetchOwnerOrderStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   owner: Hex,
   maxPages = 3,
 ): Promise<Map<string, OrderStatusInfo>> {
@@ -336,7 +332,6 @@ export async function fetchOwnerOrderStatuses(
 export async function fetchFlashLoanEnrichmentByUids(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   uids: string[],
 ): Promise<Map<string, FlashLoanEnrichment>> {
   const result = new Map<string, FlashLoanEnrichment>();

@@ -88,7 +88,6 @@ export const ALL_HANDLER_ADDRESSES: readonly string[] = [
 
 export function getOrderTypeFromHandler(
   handler: string,
-  chainId: number,
 ): OrderType {
   return HANDLER_MAP[chainId]?.[handler.toLowerCase()] ?? "Unknown";
 }

@@ -43,7 +43,6 @@ if (!isTest) {
       // Upstream also matches nextCheckBlock IS NULL; rows always get a
       // nextCheckBlock at insert/precompute, so the _lte branch suffices.
       const due = await context.ConditionalOrderGenerator.getWhere({
-        chainId: { _eq: chainId },
         status: { _eq: "Active" },
         allCandidatesKnown: { _eq: true },
         nextCheckBlock: { _lte: currentBlock },

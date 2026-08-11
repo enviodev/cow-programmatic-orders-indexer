@@ -62,14 +62,12 @@ enum FlashLoanOrderKind {
 type Transaction {
   id: ID! # chainId + "_" + hash
   hash: String!
-  chainId: Int!
   blockNumber: BigInt! @index
   blockTimestamp: BigInt!
 }
 
 type ConditionalOrderGenerator {
   id: ID! # chainId + "_" + blockNumber + "_" + logIndex (upstream: ponder event.id)
-  chainId: Int! @index
   owner: String! @index # indexed address from event
   resolvedOwner: String @index # mapped EOA at insert time; falls back to owner if no mapping exists yet
   ownerAddressType: AddressType # null = direct EOA or Aave adapter not yet discovered
@@ -97,7 +95,6 @@ type ConditionalOrderGenerator {
 type DiscreteOrder {
   id: ID! # chainId + "_" + orderUid
   orderUid: String! @index
-  chainId: Int! @index
   conditionalOrderGenerator: ConditionalOrderGenerator!
   status: DiscreteOrderStatus! @index
   sellAmount: String! # uint256 as decimal string
@@ -113,7 +110,6 @@ type DiscreteOrder {
 type CandidateDiscreteOrder {
   id: ID! # chainId + "_" + orderUid
   orderUid: String! @index
-  chainId: Int! @index
   conditionalOrderGenerator: ConditionalOrderGenerator!
   sellAmount: String!
   buyAmount: String!
@@ -126,7 +122,6 @@ type CandidateDiscreteOrder {
 type OwnerMapping {
   id: ID! # chainId + "_" + address
   address: String! @index # the proxy or helper contract address
-  chainId: Int! @index
   owner: String! @index # fully resolved owner (never an intermediate proxy)
   addressType: AddressType!
   txHash: String! # transaction where this mapping was discovered
@@ -141,7 +136,6 @@ type FlashLoanOrder {
   id: ID! # chainId + "_" + orderUid
   # ── From the Trade event (always present) ──
   orderUid: String! @index
-  chainId: Int! @index
   adapter: String! @index # the per-order Aave adapter (Trade event owner topic)
   sellToken: String!
   buyToken: String!
@@ -175,7 +169,6 @@ type FlashLoanOrder {
 # them until the scan succeeds or the attempt cap is reached.
 type PendingSettlementScan {
   id: ID! # chainId + "_" + txHash
-  chainId: Int! @index
   txHash: String!
   blockNumber: BigInt!
   blockTimestamp: BigInt!
@@ -191,7 +184,6 @@ type PendingSettlementScan {
 # (status + executed amounts) and the flash-loan path (kind/receiver/intended).
 type OrderUidCache {
   id: ID! # chainId + "_" + orderUid
-  chainId: Int! @index
   orderUid: String!
   status: String!
   fetchedAt: BigInt!
@@ -210,7 +202,6 @@ type OrderUidCache {
 # persists it, and `complete` flips once the last page is reached.
 type OwnerDrainProgress {
   id: ID! # chainId + "_" + owner
-  chainId: Int!
   owner: String!
   nextOffset: Int!
   complete: Boolean!
@@ -222,7 +213,6 @@ type OwnerDrainProgress {
 # (stable across redeploys), not the per-deployment generator id.
 type ComposableOrderCache {
   id: ID! # chainId + "_" + orderUid
-  chainId: Int! @index
   orderUid: String!
   owner: String! @index
   generatorHash: String!

@@ -15,13 +15,11 @@ export type PendingFlashLoanRow = any; // FlashLoanOrder entity row
 export async function selectPendingFlashLoanOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   limit?: number,
   // Bounded scan: restrict to one orderUid range bucket (see nextHexBucket).
   uidRange?: { _gte: string; _lt: string },
 ): Promise<PendingFlashLoanRow[]> {
   const pending = await context.FlashLoanOrder.getWhere({
-    chainId: { _eq: chainId },
     enriched: { _eq: false },
     enrichmentAttempts: { _lt: MAX_FLASH_LOAN_ENRICHMENT_ATTEMPTS },
     ...(uidRange ? { orderUid: uidRange } : {}),
@@ -41,7 +39,6 @@ export async function selectPendingFlashLoanOrders(
 export async function enrichFlashLoanOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  chainId: number,
   enrichedAtTs: bigint,
   rows: PendingFlashLoanRow[],
 ): Promise<{ enriched: number; missing: number }> {

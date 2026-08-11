@@ -31,7 +31,6 @@ if (!isTest) {
       );
 
       const pending = await context.PendingSettlementScan.getWhere({
-        chainId: { _eq: chainId },
         attempts: { _lt: MAX_SCAN_ATTEMPTS },
       });
       if (pending.length === 0) return;

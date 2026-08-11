@@ -33,7 +33,6 @@ if (!isTest) {
       // Bounded scan: one orderUid-nibble bucket of open orders per firing.
       const bucket = nextHexBucket(`ost:${chainId}`);
       const allOpen = await context.DiscreteOrder.getWhere({
-        chainId: { _eq: chainId },
         status: { _eq: "Open" },
         orderUid: bucket,
       });
@@ -76,7 +75,6 @@ if (!isTest) {
       // non-terminal should be cancelled from on-chain truth. Generators
       // resolve via batched .get — no all-cancelled-generators table scan.
       const stillOpen = await context.DiscreteOrder.getWhere({
-        chainId: { _eq: chainId },
         status: { _eq: "Open" },
         orderUid: bucket,
       });

@@ -4,7 +4,6 @@ const blockTime = 5;
 
 export const gnosis: ChainConfig = {
   name: "gnosis",
-  chainId: 100,
   blockTime,
   composableCow: {
     address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74",

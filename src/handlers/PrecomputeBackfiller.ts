@@ -37,7 +37,6 @@ if (!isTest) {
       // Bounded scan: one hash-nibble bucket per firing (~1/16 of pending).
       const bucket = nextHexBucket(`precompute:${chainId}`);
       const pending = await context.ConditionalOrderGenerator.getWhere({
-        chainId: { _eq: chainId },
         precomputePending: { _eq: true },
         hash: bucket,
       });

@@ -244,7 +244,6 @@ export const orderbookAccountOrders = createEffect(
   {
     name: "orderbookAccountOrders",
     input: S.schema({
-      chainId: S.number,
       owner: S.string,
       maxPages: S.number, // 0 = unlimited
       signingScheme: S.optional(S.string),
@@ -309,7 +308,6 @@ export const orderbookAccountHistoryPage = createEffect(
   {
     name: "orderbookAccountHistoryPage",
     input: S.schema({
-      chainId: S.number,
       owner: S.string,
       maxPages: S.number,
       pageSize: S.number,
@@ -375,7 +373,7 @@ export const orderbookAccountHistoryPage = createEffect(
 export const orderbookOrdersByUids = createEffect(
   {
     name: "orderbookOrdersByUids",
-    input: S.schema({ chainId: S.number, uidsJson: S.string }),
+    input: S.schema({ uidsJson: S.string }),
     output: S.string, // JSON OrderbookOrder[]
     cache: false, // statuses change over time; terminal results are cached in OrderUidCache
     // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint
