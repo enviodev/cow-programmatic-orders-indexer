@@ -15,8 +15,8 @@
  *    the tip drains, so differences there are expected, not bugs.
  */
 
-const THEIRS = "https://programmatic-orders.cow.fi/graphql";
-const OURS = "https://indexer.us.hyperindex.xyz/c63fb37/v1/graphql";
+const THEIRS = process.env.THEIRS_URL ?? "https://programmatic-orders.cow.fi/graphql";
+const OURS = process.env.OURS_URL ?? "https://indexer.us.hyperindex.xyz/0b7a2d6/v1/graphql";
 const SAMPLE = Number(process.env.SAMPLE ?? 50);
 
 async function gql(url, query, variables) {
