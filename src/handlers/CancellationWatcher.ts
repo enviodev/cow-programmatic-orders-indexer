@@ -92,6 +92,7 @@ if (!isTest) {
             lastCheckBlock: currentBlock,
             lastPollResult: "cancelled:removeMapping",
             nextCheckBlock: undefined,
+            updatedAtBlock: currentBlock,
           });
           if (!context.isPreload) {
             log("info", "CancellationWatcher:CANCELLED", { block: String(currentBlock), chainId, generatorId: gen.id, orderType: gen.orderType });

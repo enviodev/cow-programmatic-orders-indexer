@@ -8,6 +8,7 @@ import { indexer } from "envio";
 import { DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK } from "../constants.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
+import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
@@ -23,6 +24,7 @@ if (!isTest) {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
+      const currentBlock = BigInt(block.number);
       const currentTimestamp = await blockTimestamp(context, block);
 
       const maxOrdersPerBlock = resolveCap(
@@ -52,6 +54,7 @@ if (!isTest) {
         const statuses = await fetchOrderStatusByUids(context, uids);
 
         let updated = 0;
+        const updatedGeneratorIds: string[] = [];
         for (const order of openOrders) {
           const info = statuses.get(order.orderUid);
           if (!info || !VALID_DISCRETE_STATUSES.has(info.status)) continue;
@@ -61,9 +64,12 @@ if (!isTest) {
             status: toDiscreteStatus(info.status),
             executedSellAmount: info.executedSellAmount ?? undefined,
             executedBuyAmount: info.executedBuyAmount ?? undefined,
+            updatedAtBlock: currentBlock,
           });
+          updatedGeneratorIds.push(order.conditionalOrderGenerator_id);
           updated++;
         }
+        await bumpGeneratorsUpdatedAt(context, updatedGeneratorIds, currentBlock);
 
         if (updated > 0 && !context.isPreload) {
           log("info", "OrderStatusTracker:DONE", { block: String(block.number), chainId, open: openOrders.length, updated });
@@ -82,18 +88,22 @@ if (!isTest) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         stillOpen.map((o: any) => context.ConditionalOrderGenerator.get(o.conditionalOrderGenerator_id)),
       );
+      const cascadedGeneratorIds: string[] = [];
       for (let i = 0; i < stillOpen.length; i++) {
         const order = stillOpen[i];
         if (!order) continue;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const gen = gens[i] as any;
         if (gen && gen.status === "Cancelled") {
-          context.DiscreteOrder.set({ ...order, status: "Cancelled" });
+          context.DiscreteOrder.set({ ...order, status: "Cancelled", updatedAtBlock: currentBlock });
+          cascadedGeneratorIds.push(order.conditionalOrderGenerator_id);
         } else if (order.validTo != null && order.validTo <= currentTimestamp) {
           // Expire orders past validTo (same bucket).
-          context.DiscreteOrder.set({ ...order, status: "Expired" });
+          context.DiscreteOrder.set({ ...order, status: "Expired", updatedAtBlock: currentBlock });
+          cascadedGeneratorIds.push(order.conditionalOrderGenerator_id);
         }
       }
+      await bumpGeneratorsUpdatedAt(context, cascadedGeneratorIds, currentBlock);
     },
   );
 }

@@ -80,6 +80,7 @@ export async function precomputeAndDiscover(
   orderType: OrderType,
   decodedParams: Record<string, string> | null,
   blockTimestamp: bigint,
+  blockNumber: bigint,
 ): Promise<boolean> {
   const chainId = context.chain.id;
   const precomputed = precomputeOrderUids(chainId, owner, orderType, decodedParams, blockTimestamp);
@@ -102,6 +103,7 @@ export async function precomputeAndDiscover(
           ...existing,
           status: toDiscreteStatus(apiStatus),
           validTo: BigInt(order.validTo),
+          updatedAtBlock: blockNumber,
         });
       } else {
         context.DiscreteOrder.set({
@@ -117,6 +119,7 @@ export async function precomputeAndDiscover(
           executedSellAmount: statusInfo?.executedSellAmount ?? undefined,
           executedBuyAmount: statusInfo?.executedBuyAmount ?? undefined,
           promotedAt: undefined,
+          updatedAtBlock: blockNumber,
         });
       }
     } else {
@@ -155,6 +158,7 @@ export async function precomputeAndDiscover(
         status: "Completed",
         allCandidatesKnown: true,
         lastPollResult: "precompute:allTerminal",
+        updatedAtBlock: blockNumber,
       });
     }
     log("info", "precompute:allTerminal", { count: precomputed.length, generatorId });
@@ -162,7 +166,8 @@ export async function precomputeAndDiscover(
   }
 
   // UIDs are fully known even though some orders are still open —
-  // OrderDiscoveryPoller can skip this generator, OrderStatusTracker tracks the open orders.
+  // OrderDiscoveryPoller can skip this generator, OrderStatusTracker tracks the
+  // open orders. Standalone allCandidatesKnown flips do NOT bump updatedAtBlock.
   if (generator) {
     context.ConditionalOrderGenerator.set({
       ...generator,

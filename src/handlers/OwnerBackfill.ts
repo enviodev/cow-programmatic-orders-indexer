@@ -139,7 +139,7 @@ async function drainOwnerBatch(
         BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
         `OwnerBackfill:owner:${owner}`,
       );
-      const discovered = await upsertDiscreteOrders(context, orders);
+      const discovered = await upsertDiscreteOrders(context, orders, currentBlock);
 
       // Only flip the flag when the owner's history was drained in full. A partial
       // drain (rate limit / timeout) leaves the owner eligible → retried next block.

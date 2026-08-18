@@ -88,6 +88,10 @@ type ConditionalOrderGenerator {
   consecutiveTryNextBlock: Int! # backoff counter for stuck generators
   historyBackfilled: Boolean! @index # OwnerBackfill has drained this generator's full /account history
   precomputePending: Boolean! @index # deterministic generator created during backfill; PrecomputeBackfiller runs its UID precompute at the tip
+  # Sync cursor: the indexer's processing block of the last client-relevant
+  # change (insert, status change, or any change to a child discrete order).
+  # NOT bumped for polling metadata or standalone allCandidatesKnown flips.
+  updatedAtBlock: BigInt! @index
   discreteOrders: [DiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
   candidateDiscreteOrders: [CandidateDiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
 }
@@ -105,6 +109,10 @@ type DiscreteOrder {
   executedSellAmount: String # actual executed amount (from API, post-settlement)
   executedBuyAmount: String # actual executed amount (from API, post-settlement)
   promotedAt: BigInt # block timestamp when CandidateConfirmer promoted from candidate; null = created directly
+  # Sync cursor: the indexer's processing block of the last insert or
+  # status/executed-amount change. Every change here also bumps the parent
+  # generator's updatedAtBlock.
+  updatedAtBlock: BigInt! @index
 }
 
 type CandidateDiscreteOrder {

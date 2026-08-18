@@ -240,6 +240,7 @@ if (!isTest) {
                   lastCheckBlock: currentBlock,
                   lastPollResult: `pollNever:${pollResult.reason}`,
                   consecutiveTryNextBlock: 0,
+                  updatedAtBlock: currentBlock,
                 });
               }
               if (!context.isPreload) {
@@ -258,6 +259,7 @@ if (!isTest) {
                   lastCheckBlock: currentBlock,
                   lastPollResult: "cancelled:SingleOrderNotAuthed",
                   consecutiveTryNextBlock: 0,
+                  updatedAtBlock: currentBlock,
                 });
               }
               if (!context.isPreload) {

@@ -18,6 +18,7 @@ import {
   SIGNING_SCHEME_EIP1271,
 } from "../../constants.js";
 import { TimeoutError, withTimeout } from "../withTimeout.js";
+import { bumpGeneratorsUpdatedAt } from "../updatedAtBlock.js";
 import { log } from "../logger.js";
 import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
 import {
@@ -209,23 +210,47 @@ export async function fetchComposableOrders(
  * Upsert composable orders into DiscreteOrder.
  * On conflict the API's authoritative status/validTo/executed overwrite the
  * existing row (other fields — incl. promotedAt — are preserved).
+ *
+ * Skips no-op writes: resumed drain slices and delta rebuilds re-upsert rows
+ * already persisted. Without the diff every retry would bump updatedAtBlock on
+ * untouched rows and their parent generators, making cursor-synced clients
+ * re-fetch data that never changed. Returns the number of rows actually
+ * inserted or changed, not the input size, and bumps the changed rows' parent
+ * generators.
  */
 export async function upsertDiscreteOrders(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
   orders: ComposableOrder[],
+  blockNumber: bigint,
 ): Promise<number> {
   if (orders.length === 0) return 0;
+  let changedCount = 0;
+  const changedGeneratorIds: string[] = [];
   for (const order of orders) {
     const id = order.uid;
     const existing = await context.DiscreteOrder.get(id);
     if (existing) {
+      const status = toDiscreteStatus(order.status);
+      const validTo = order.validTo != null ? BigInt(order.validTo) : undefined;
+      const executedSellAmount = order.executedSellAmount ?? undefined;
+      const executedBuyAmount = order.executedBuyAmount ?? undefined;
+      // Compare only the fields this upsert can change.
+      if (
+        existing.status === status &&
+        existing.validTo === validTo &&
+        existing.executedSellAmount === executedSellAmount &&
+        existing.executedBuyAmount === executedBuyAmount
+      ) {
+        continue;
+      }
       context.DiscreteOrder.set({
         ...existing,
-        status: toDiscreteStatus(order.status),
-        validTo: order.validTo != null ? BigInt(order.validTo) : undefined,
-        executedSellAmount: order.executedSellAmount ?? undefined,
-        executedBuyAmount: order.executedBuyAmount ?? undefined,
+        status,
+        validTo,
+        executedSellAmount,
+        executedBuyAmount,
+        updatedAtBlock: blockNumber,
       });
     } else {
       context.DiscreteOrder.set({
@@ -241,10 +266,14 @@ export async function upsertDiscreteOrders(
         executedSellAmount: order.executedSellAmount ?? undefined,
         executedBuyAmount: order.executedBuyAmount ?? undefined,
         promotedAt: undefined,
+        updatedAtBlock: blockNumber,
       });
     }
+    changedCount++;
+    changedGeneratorIds.push(order.generatorId);
   }
-  return orders.length;
+  await bumpGeneratorsUpdatedAt(context, changedGeneratorIds, blockNumber);
+  return changedCount;
 }
 
 /**

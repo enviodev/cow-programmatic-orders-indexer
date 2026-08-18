@@ -13,6 +13,7 @@ import {
 import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { withTimeout } from "../helpers/withTimeout.js";
+import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
 
@@ -21,7 +22,9 @@ type CandidateRow = any;
 
 // Promote a candidate into DiscreteOrder. insertOnly mirrors upstream's
 // onConflictDoNothing (an existing terminal row wins); otherwise the API
-// status/executed/promotedAt overwrite (onConflictDoUpdate).
+// status/executed/promotedAt overwrite (onConflictDoUpdate). Bumps the parent
+// generator's sync cursor only when a row was actually inserted or changed —
+// insertOnly conflicts are no-ops and must not bump.
 async function promoteCandidate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -30,6 +33,7 @@ async function promoteCandidate(
   executedSellAmount: string | null,
   executedBuyAmount: string | null,
   promotedAt: bigint,
+  currentBlock: bigint,
   insertOnly: boolean,
 ): Promise<void> {
   const id = candidate.orderUid;
@@ -42,6 +46,7 @@ async function promoteCandidate(
       executedSellAmount: executedSellAmount ?? undefined,
       executedBuyAmount: executedBuyAmount ?? undefined,
       promotedAt,
+      updatedAtBlock: currentBlock,
     });
   } else {
     context.DiscreteOrder.set({
@@ -57,8 +62,10 @@ async function promoteCandidate(
       executedSellAmount: executedSellAmount ?? undefined,
       executedBuyAmount: executedBuyAmount ?? undefined,
       promotedAt,
+      updatedAtBlock: currentBlock,
     });
   }
+  await bumpGeneratorsUpdatedAt(context, [candidate.conditionalOrderGenerator_id], currentBlock);
 }
 
 if (!isTest) {
@@ -119,6 +126,7 @@ if (!isTest) {
             apiEntry?.executedSellAmount ?? null,
             apiEntry?.executedBuyAmount ?? null,
             currentTimestamp,
+            BigInt(block.number),
             true, // onConflictDoNothing — an existing terminal row wins
           );
           context.CandidateDiscreteOrder.deleteUnsafe(c.id);
@@ -155,6 +163,7 @@ if (!isTest) {
           orderbookEntry.executedSellAmount,
           orderbookEntry.executedBuyAmount,
           currentTimestamp,
+          BigInt(block.number),
           false, // onConflictDoUpdate
         );
         context.CandidateDiscreteOrder.deleteUnsafe(candidate.id);
@@ -219,6 +228,7 @@ if (!isTest) {
             entry?.executedSellAmount ?? null,
             entry?.executedBuyAmount ?? null,
             currentTimestamp,
+            BigInt(block.number),
             true, // onConflictDoNothing
           );
           context.CandidateDiscreteOrder.deleteUnsafe(c.id);

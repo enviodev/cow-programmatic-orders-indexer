@@ -167,6 +167,7 @@ async function insertGenerator(
       // tip (PrecomputeBackfiller) so the event backfill never blocks on
       // orderbook I/O. Live ones precompute inline, exactly like upstream.
       precomputePending: !isLive && !isNonDeterministic(orderType),
+      updatedAtBlock: BigInt(event.block.number),
     });
   }
 
@@ -192,7 +193,7 @@ indexer.onEvent(
     if (isLive) {
       await precomputeAndDiscover(
         context, generatorId, ownerAddress, orderType, decodedParams,
-        BigInt(event.block.timestamp),
+        BigInt(event.block.timestamp), BigInt(event.block.number),
       );
     }
   },

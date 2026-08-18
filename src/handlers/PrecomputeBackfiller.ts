@@ -68,6 +68,7 @@ if (!isTest) {
           gen.orderType as OrderType,
           (gen.decodedParams ?? null) as Record<string, string> | null,
           ts,
+          BigInt(block.number),
         );
         // Re-read: precomputeAndDiscover may have updated status/allCandidatesKnown.
         const fresh = await context.ConditionalOrderGenerator.get(gen.id);
