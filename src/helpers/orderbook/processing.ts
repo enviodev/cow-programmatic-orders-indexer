@@ -13,6 +13,7 @@ import { fetchOrdersByUids } from "./http.js";
 import { upsertComposableCache } from "./cache.js";
 import {
   TERMINAL_STATUSES,
+  toBigIntOrNull,
   type ComposableCacheRow,
   type ComposableOrder,
   type OrderbookOrder,
@@ -88,9 +89,9 @@ export async function filterAndProcess(
       feeAmount: order.feeAmount,
       validTo: order.validTo,
       creationDate: BigInt(Math.floor(new Date(order.creationDate).getTime() / 1000)),
-      executedSellAmount: order.executedSellAmount,
-      executedBuyAmount: order.executedBuyAmount,
-      executedFee: order.executedFee,
+      executedSellAmount: toBigIntOrNull(order.executedSellAmount),
+      executedBuyAmount: toBigIntOrNull(order.executedBuyAmount),
+      executedFee: toBigIntOrNull(order.executedFee),
     });
   }
 
@@ -173,9 +174,9 @@ export async function remapToCurrentGenerators(
       feeAmount: row.feeAmount,
       validTo: row.validTo,
       creationDate: row.creationDate,
-      executedSellAmount: row.executedSellAmount,
-      executedBuyAmount: row.executedBuyAmount,
-      executedFee: row.executedFee,
+      executedSellAmount: toBigIntOrNull(row.executedSellAmount),
+      executedBuyAmount: toBigIntOrNull(row.executedBuyAmount),
+      executedFee: toBigIntOrNull(row.executedFee),
     });
   }
   return results;
@@ -214,9 +215,9 @@ export async function matchHistoryRowsToGenerators(
       feeAmount: row.feeAmount,
       validTo: row.validTo,
       creationDate: BigInt(row.creationDate),
-      executedSellAmount: row.executedSellAmount,
-      executedBuyAmount: row.executedBuyAmount,
-      executedFee: row.executedFee,
+      executedSellAmount: toBigIntOrNull(row.executedSellAmount),
+      executedBuyAmount: toBigIntOrNull(row.executedBuyAmount),
+      executedFee: toBigIntOrNull(row.executedFee),
     });
   }
   return results;

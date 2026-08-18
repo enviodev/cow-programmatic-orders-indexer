@@ -106,9 +106,9 @@ type DiscreteOrder {
   feeAmount: String!
   validTo: BigInt @index # uint32 Unix timestamp — from API or getTradeableOrderWithSignature
   creationDate: BigInt! # block timestamp (seconds)
-  executedSellAmount: String # actual executed amount (from API, post-settlement)
-  executedBuyAmount: String # actual executed amount (from API, post-settlement)
-  executedFee: String # actual fee taken from surplus (API executedFee; the legacy executedFeeAmount is always "0")
+  executedSellAmount: BigInt # actual executed amount (from API, post-settlement)
+  executedBuyAmount: BigInt # actual executed amount (from API, post-settlement)
+  executedFee: BigInt # actual fee taken from surplus (API executedFee; the legacy executedFeeAmount is always "0")
   promotedAt: BigInt # block timestamp when CandidateConfirmer promoted from candidate; null = created directly
   # Sync cursor: the indexer's processing block of the last insert or
   # status/executed-amount change. Every change here also bumps the parent

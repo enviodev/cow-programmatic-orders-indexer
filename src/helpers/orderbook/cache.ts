@@ -18,7 +18,8 @@ import {
   type FlashLoanEnrichment,
 } from "./types.js";
 
-/** Project a freshly-decoded ComposableOrder into the durable-cache row shape. */
+/** Project a freshly-decoded ComposableOrder into the durable-cache row shape.
+ *  The cache entities store amounts as String — bigints convert at this boundary. */
 export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
   return {
     orderUid: o.uid,
@@ -30,9 +31,9 @@ export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
     feeAmount: o.feeAmount,
     validTo: o.validTo ?? null,
     creationDate: o.creationDate,
-    executedSellAmount: o.executedSellAmount ?? null,
-    executedBuyAmount: o.executedBuyAmount ?? null,
-    executedFee: o.executedFee ?? null,
+    executedSellAmount: o.executedSellAmount?.toString() ?? null,
+    executedBuyAmount: o.executedBuyAmount?.toString() ?? null,
+    executedFee: o.executedFee?.toString() ?? null,
   };
 }
 
@@ -145,9 +146,9 @@ export async function cacheUidStatuses(
       orderUid: order.uid,
       status: order.status,
       fetchedAt: now,
-      executedSellAmount: order.executedSellAmount ?? undefined,
-      executedBuyAmount: order.executedBuyAmount ?? undefined,
-      executedFee: order.executedFee ?? undefined,
+      executedSellAmount: order.executedSellAmount?.toString() ?? undefined,
+      executedBuyAmount: order.executedBuyAmount?.toString() ?? undefined,
+      executedFee: order.executedFee?.toString() ?? undefined,
     });
   }
 }

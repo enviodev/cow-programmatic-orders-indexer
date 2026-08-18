@@ -40,6 +40,7 @@ import {
 import {
   PAGE_LIMIT,
   TERMINAL_STATUSES,
+  toBigIntOrNull,
   toDiscreteStatus,
   type ComposableOrder,
   type FlashLoanEnrichment,
@@ -238,9 +239,9 @@ export async function upsertDiscreteOrders(
       // coalesce with the existing value so they never erase amounts already
       // written by a fresh fetch. The no-op diff below compares the
       // post-coalesce effective values.
-      const executedSellAmount = order.executedSellAmount ?? existing.executedSellAmount;
-      const executedBuyAmount = order.executedBuyAmount ?? existing.executedBuyAmount;
-      const executedFee = order.executedFee ?? existing.executedFee;
+      const executedSellAmount = order.executedSellAmount ?? existing.executedSellAmount ?? undefined;
+      const executedBuyAmount = order.executedBuyAmount ?? existing.executedBuyAmount ?? undefined;
+      const executedFee = order.executedFee ?? existing.executedFee ?? undefined;
       // Compare only the fields this upsert can change.
       if (
         existing.status === status &&
@@ -318,9 +319,9 @@ export async function fetchOrderStatusByUids(
     if (cachedData && TERMINAL_STATUSES.has(cachedData.status)) {
       const info: OrderStatusInfo = {
         status: cachedData.status,
-        executedSellAmount: cachedData.executedSellAmount,
-        executedBuyAmount: cachedData.executedBuyAmount,
-        executedFee: cachedData.executedFee,
+        executedSellAmount: toBigIntOrNull(cachedData.executedSellAmount),
+        executedBuyAmount: toBigIntOrNull(cachedData.executedBuyAmount),
+        executedFee: toBigIntOrNull(cachedData.executedFee),
       };
       if (cachedData.status === "fulfilled" && cachedData.executedFee == null) {
         staleFallbacks.set(uid, info);
@@ -360,9 +361,9 @@ export async function fetchOrderStatusByUids(
     for (const order of fetched) {
       result.set(order.uid, {
         status: order.status,
-        executedSellAmount: order.executedSellAmount,
-        executedBuyAmount: order.executedBuyAmount,
-        executedFee: order.executedFee,
+        executedSellAmount: toBigIntOrNull(order.executedSellAmount),
+        executedBuyAmount: toBigIntOrNull(order.executedBuyAmount),
+        executedFee: toBigIntOrNull(order.executedFee),
       });
       if (TERMINAL_STATUSES.has(order.status)) {
         newTerminal.push({
@@ -376,9 +377,9 @@ export async function fetchOrderStatusByUids(
           feeAmount: order.feeAmount,
           validTo: order.validTo,
           creationDate: 0n,
-          executedSellAmount: order.executedSellAmount,
-          executedBuyAmount: order.executedBuyAmount,
-          executedFee: order.executedFee,
+          executedSellAmount: toBigIntOrNull(order.executedSellAmount),
+          executedBuyAmount: toBigIntOrNull(order.executedBuyAmount),
+          executedFee: toBigIntOrNull(order.executedFee),
         });
       }
     }
@@ -416,9 +417,9 @@ export async function fetchOwnerOrderStatuses(
   for (const order of orders) {
     result.set(order.uid, {
       status: order.status,
-      executedSellAmount: order.executedSellAmount,
-      executedBuyAmount: order.executedBuyAmount,
-      executedFee: order.executedFee,
+      executedSellAmount: toBigIntOrNull(order.executedSellAmount),
+      executedBuyAmount: toBigIntOrNull(order.executedBuyAmount),
+      executedFee: toBigIntOrNull(order.executedFee),
     });
   }
   return result;

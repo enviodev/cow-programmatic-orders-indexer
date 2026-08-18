@@ -49,17 +49,24 @@ export interface ComposableOrder {
   feeAmount: string;
   validTo: number | null;
   creationDate: bigint;
-  executedSellAmount: string | null;
-  executedBuyAmount: string | null;
-  executedFee: string | null;
+  executedSellAmount: bigint | null;
+  executedBuyAmount: bigint | null;
+  executedFee: bigint | null;
 }
 
-/** Status + executed amounts returned by fetchOrderStatusByUids. */
+/** Status + executed amounts returned by fetchOrderStatusByUids.
+ *  Amounts are bigint (matching the DiscreteOrder columns); null when the
+ *  cached entry predates the executed columns. */
 export interface OrderStatusInfo {
   status: string;
-  executedSellAmount: string | null; // null when served from cache
-  executedBuyAmount: string | null;
-  executedFee: string | null;
+  executedSellAmount: bigint | null;
+  executedBuyAmount: bigint | null;
+  executedFee: bigint | null;
+}
+
+/** API/cache decimal string -> bigint at the storage boundary. */
+export function toBigIntOrNull(value: string | null | undefined): bigint | null {
+  return value == null ? null : BigInt(value);
 }
 
 /** CoW-order fields used to enrich a flash-loan order, from the orderbook. */
