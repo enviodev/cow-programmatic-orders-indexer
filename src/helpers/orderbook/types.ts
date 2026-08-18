@@ -19,6 +19,7 @@ export interface OrderbookOrder {
   signature: string;
   executedSellAmount: string;
   executedBuyAmount: string;
+  executedFee: string;
 }
 
 /** DiscreteOrder.status enum values (capitalized — lowercase "open" is reserved in envio schemas). */
@@ -50,6 +51,7 @@ export interface ComposableOrder {
   creationDate: bigint;
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
+  executedFee: string | null;
 }
 
 /** Status + executed amounts returned by fetchOrderStatusByUids. */
@@ -57,6 +59,7 @@ export interface OrderStatusInfo {
   status: string;
   executedSellAmount: string | null; // null when served from cache
   executedBuyAmount: string | null;
+  executedFee: string | null;
 }
 
 /** CoW-order fields used to enrich a flash-loan order, from the orderbook. */
@@ -82,6 +85,7 @@ export interface ComposableCacheRow {
   creationDate: bigint;
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
+  executedFee: string | null;
 }
 
 /** Cached order data returned by getCachedUidStatuses. */
@@ -89,6 +93,7 @@ export interface CachedOrderData {
   status: string;
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
+  executedFee: string | null;
 }
 
 export const TERMINAL_STATUSES = new Set(["fulfilled", "expired", "cancelled"]);

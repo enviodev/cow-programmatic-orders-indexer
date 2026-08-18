@@ -32,6 +32,7 @@ export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
     creationDate: o.creationDate,
     executedSellAmount: o.executedSellAmount ?? null,
     executedBuyAmount: o.executedBuyAmount ?? null,
+    executedFee: o.executedFee ?? null,
   };
 }
 
@@ -120,6 +121,7 @@ export async function getCachedUidStatuses(
       status: row.status,
       executedSellAmount: row.executedSellAmount ?? null,
       executedBuyAmount: row.executedBuyAmount ?? null,
+      executedFee: row.executedFee ?? null,
     });
   }
 
@@ -145,6 +147,7 @@ export async function cacheUidStatuses(
       fetchedAt: now,
       executedSellAmount: order.executedSellAmount ?? undefined,
       executedBuyAmount: order.executedBuyAmount ?? undefined,
+      executedFee: order.executedFee ?? undefined,
     });
   }
 }
@@ -175,6 +178,7 @@ export async function readOwnerComposableCache(
     creationDate: row.creationDate,
     executedSellAmount: row.executedSellAmount ?? null,
     executedBuyAmount: row.executedBuyAmount ?? null,
+    executedFee: row.executedFee ?? null,
   }));
 }
 
@@ -203,6 +207,7 @@ export async function upsertComposableCache(
         creationDate: r.creationDate,
         executedSellAmount: r.executedSellAmount ?? undefined,
         executedBuyAmount: r.executedBuyAmount ?? undefined,
+        executedFee: r.executedFee ?? undefined,
         fetchedAt: now,
       });
     }

@@ -16,6 +16,7 @@
 import type { Hex } from "viem";
 import { computeOrderUid, type GPv2OrderData, KIND_SELL, KIND_BUY, BALANCE_ERC20 } from "./orderUid.js";
 import { fetchOrderStatusByUids } from "./orderbook/client.js";
+import { refreshTwapExecutedTotals } from "./executedAmounts.js";
 import { toDiscreteStatus } from "./orderbook/types.js";
 import { type OrderType, DETERMINISTIC_ORDER_TYPE } from "../utils/order-types.js";
 import { log } from "./logger.js";
@@ -89,6 +90,7 @@ export async function precomputeAndDiscover(
   const uids = precomputed.map((o) => o.orderUid);
   const statuses = await fetchOrderStatusByUids(context, uids);
 
+  let wroteDiscrete = false;
   for (const order of precomputed) {
     const statusInfo = statuses.get(order.orderUid);
     const apiStatus = statusInfo?.status as
@@ -103,6 +105,12 @@ export async function precomputeAndDiscover(
           ...existing,
           status: toDiscreteStatus(apiStatus),
           validTo: BigInt(order.validTo),
+          // Status lookups can be served from the cache with null executed
+          // amounts — never let a cached null erase values already written by
+          // OrderStatusTracker or OwnerBackfill (upstream coalesce).
+          executedSellAmount: statusInfo?.executedSellAmount ?? existing.executedSellAmount,
+          executedBuyAmount: statusInfo?.executedBuyAmount ?? existing.executedBuyAmount,
+          executedFee: statusInfo?.executedFee ?? existing.executedFee,
           updatedAtBlock: blockNumber,
         });
       } else {
@@ -118,10 +126,12 @@ export async function precomputeAndDiscover(
           creationDate: blockTimestamp,
           executedSellAmount: statusInfo?.executedSellAmount ?? undefined,
           executedBuyAmount: statusInfo?.executedBuyAmount ?? undefined,
+          executedFee: statusInfo?.executedFee ?? undefined,
           promotedAt: undefined,
           updatedAtBlock: blockNumber,
         });
       }
+      wroteDiscrete = true;
     } else {
       // Not on the API yet → CandidateDiscreteOrder (insert-only)
       const id = order.orderUid;
@@ -142,6 +152,10 @@ export async function precomputeAndDiscover(
         });
       }
     }
+  }
+
+  if (wroteDiscrete) {
+    await refreshTwapExecutedTotals(context, [generatorId]);
   }
 
   const allTerminal = precomputed.every((o) => {

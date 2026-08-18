@@ -14,6 +14,7 @@ import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orde
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { withTimeout } from "../helpers/withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
+import { refreshTwapExecutedTotals } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
 
@@ -32,6 +33,7 @@ async function promoteCandidate(
   status: string,
   executedSellAmount: string | null,
   executedBuyAmount: string | null,
+  executedFee: string | null,
   promotedAt: bigint,
   currentBlock: bigint,
   insertOnly: boolean,
@@ -45,6 +47,7 @@ async function promoteCandidate(
       status: toDiscreteStatus(status),
       executedSellAmount: executedSellAmount ?? undefined,
       executedBuyAmount: executedBuyAmount ?? undefined,
+      executedFee: executedFee ?? undefined,
       promotedAt,
       updatedAtBlock: currentBlock,
     });
@@ -61,6 +64,7 @@ async function promoteCandidate(
       creationDate: candidate.creationDate,
       executedSellAmount: executedSellAmount ?? undefined,
       executedBuyAmount: executedBuyAmount ?? undefined,
+      executedFee: executedFee ?? undefined,
       promotedAt,
       updatedAtBlock: currentBlock,
     });
@@ -125,12 +129,18 @@ if (!isTest) {
             apiEntry?.status ?? "cancelled",
             apiEntry?.executedSellAmount ?? null,
             apiEntry?.executedBuyAmount ?? null,
+            apiEntry?.executedFee ?? null,
             currentTimestamp,
             BigInt(block.number),
             true, // onConflictDoNothing — an existing terminal row wins
           );
           context.CandidateDiscreteOrder.deleteUnsafe(c.id);
         }
+
+        await refreshTwapExecutedTotals(
+          context,
+          orphanCandidates.map((c: CandidateRow) => c.conditionalOrderGenerator_id),
+        );
 
         if (!context.isPreload) {
           log("info", "CandidateConfirmer:parent_cancelled", { block: String(block.number), chainId, parentCancelled: orphanCandidates.length, preflightKnown: preflightStatuses.size });
@@ -153,6 +163,7 @@ if (!isTest) {
       const statuses = await fetchOrderStatusByUids(context, uids);
 
       let confirmed = 0;
+      const confirmedGeneratorIds: string[] = [];
       for (const candidate of unconfirmed) {
         const orderbookEntry = statuses.get(candidate.orderUid);
         if (!orderbookEntry) continue; // not on API yet — retry next block
@@ -162,11 +173,13 @@ if (!isTest) {
           orderbookEntry.status,
           orderbookEntry.executedSellAmount,
           orderbookEntry.executedBuyAmount,
+          orderbookEntry.executedFee,
           currentTimestamp,
           BigInt(block.number),
           false, // onConflictDoUpdate
         );
         context.CandidateDiscreteOrder.deleteUnsafe(candidate.id);
+        confirmedGeneratorIds.push(candidate.conditionalOrderGenerator_id);
         confirmed++;
       }
 
@@ -227,6 +240,7 @@ if (!isTest) {
             entry?.status ?? "expired",
             entry?.executedSellAmount ?? null,
             entry?.executedBuyAmount ?? null,
+            entry?.executedFee ?? null,
             currentTimestamp,
             BigInt(block.number),
             true, // onConflictDoNothing
@@ -235,6 +249,12 @@ if (!isTest) {
         }
       }
 
+      if (confirmed > 0 || stale.length > 0) {
+        await refreshTwapExecutedTotals(context, [
+          ...confirmedGeneratorIds,
+          ...stale.map((c: CandidateRow) => c.conditionalOrderGenerator_id),
+        ]);
+      }
       if ((confirmed > 0 || stale.length > 0) && !context.isPreload) {
         log("info", "CandidateConfirmer:DONE", { block: String(block.number), chainId, candidates: unconfirmed.length, confirmed, expired: stale.length });
       }

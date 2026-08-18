@@ -9,6 +9,7 @@ import { DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK } from "../constants.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
+import { refreshTwapExecutedTotals } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
@@ -64,12 +65,14 @@ if (!isTest) {
             status: toDiscreteStatus(info.status),
             executedSellAmount: info.executedSellAmount ?? undefined,
             executedBuyAmount: info.executedBuyAmount ?? undefined,
+            executedFee: info.executedFee ?? undefined,
             updatedAtBlock: currentBlock,
           });
           updatedGeneratorIds.push(order.conditionalOrderGenerator_id);
           updated++;
         }
         await bumpGeneratorsUpdatedAt(context, updatedGeneratorIds, currentBlock);
+        await refreshTwapExecutedTotals(context, updatedGeneratorIds);
 
         if (updated > 0 && !context.isPreload) {
           log("info", "OrderStatusTracker:DONE", { block: String(block.number), chainId, open: openOrders.length, updated });

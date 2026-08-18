@@ -19,6 +19,7 @@ import {
 } from "../../constants.js";
 import { TimeoutError, withTimeout } from "../withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../updatedAtBlock.js";
+import { refreshTwapExecutedTotals } from "../executedAmounts.js";
 import { log } from "../logger.js";
 import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
 import {
@@ -235,12 +236,14 @@ export async function upsertDiscreteOrders(
       const validTo = order.validTo != null ? BigInt(order.validTo) : undefined;
       const executedSellAmount = order.executedSellAmount ?? undefined;
       const executedBuyAmount = order.executedBuyAmount ?? undefined;
+      const executedFee = order.executedFee ?? undefined;
       // Compare only the fields this upsert can change.
       if (
         existing.status === status &&
         existing.validTo === validTo &&
         existing.executedSellAmount === executedSellAmount &&
-        existing.executedBuyAmount === executedBuyAmount
+        existing.executedBuyAmount === executedBuyAmount &&
+        existing.executedFee === executedFee
       ) {
         continue;
       }
@@ -250,6 +253,7 @@ export async function upsertDiscreteOrders(
         validTo,
         executedSellAmount,
         executedBuyAmount,
+        executedFee,
         updatedAtBlock: blockNumber,
       });
     } else {
@@ -265,6 +269,7 @@ export async function upsertDiscreteOrders(
         creationDate: order.creationDate,
         executedSellAmount: order.executedSellAmount ?? undefined,
         executedBuyAmount: order.executedBuyAmount ?? undefined,
+        executedFee: order.executedFee ?? undefined,
         promotedAt: undefined,
         updatedAtBlock: blockNumber,
       });
@@ -273,6 +278,7 @@ export async function upsertDiscreteOrders(
     changedGeneratorIds.push(order.generatorId);
   }
   await bumpGeneratorsUpdatedAt(context, changedGeneratorIds, blockNumber);
+  await refreshTwapExecutedTotals(context, changedGeneratorIds);
   return changedCount;
 }
 
@@ -305,6 +311,7 @@ export async function fetchOrderStatusByUids(
         status: cachedData.status,
         executedSellAmount: cachedData.executedSellAmount,
         executedBuyAmount: cachedData.executedBuyAmount,
+        executedFee: cachedData.executedFee,
       });
     } else {
       toFetch.push(uid);
@@ -337,6 +344,7 @@ export async function fetchOrderStatusByUids(
         status: order.status,
         executedSellAmount: order.executedSellAmount,
         executedBuyAmount: order.executedBuyAmount,
+        executedFee: order.executedFee,
       });
       if (TERMINAL_STATUSES.has(order.status)) {
         newTerminal.push({
@@ -352,6 +360,7 @@ export async function fetchOrderStatusByUids(
           creationDate: 0n,
           executedSellAmount: order.executedSellAmount,
           executedBuyAmount: order.executedBuyAmount,
+          executedFee: order.executedFee,
         });
       }
     }
@@ -384,6 +393,7 @@ export async function fetchOwnerOrderStatuses(
       status: order.status,
       executedSellAmount: order.executedSellAmount,
       executedBuyAmount: order.executedBuyAmount,
+      executedFee: order.executedFee,
     });
   }
   return result;

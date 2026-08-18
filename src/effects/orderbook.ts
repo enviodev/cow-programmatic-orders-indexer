@@ -288,6 +288,7 @@ export interface HistoryPageRow {
   creationDate: number; // Unix seconds
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
+  executedFee: string | null;
 }
 
 /**
@@ -363,6 +364,7 @@ export const orderbookAccountHistoryPage = createEffect(
         creationDate: Math.floor(new Date(order.creationDate).getTime() / 1000),
         executedSellAmount: order.executedSellAmount ?? null,
         executedBuyAmount: order.executedBuyAmount ?? null,
+        executedFee: order.executedFee ?? null,
       });
     }
 
