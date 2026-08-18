@@ -44,7 +44,7 @@ if (!isTest) {
       let missing = 0;
       for (let i = 0; i < pending.length; i += FLASH_LOAN_BACKFILL_SLICE_SIZE) {
         const slice = pending.slice(i, i + FLASH_LOAN_BACKFILL_SLICE_SIZE);
-        const r = await enrichFlashLoanOrders(context, chainId, (await blockTimestamp(context, block)), slice);
+        const r = await enrichFlashLoanOrders(context, (await blockTimestamp(context, block)), slice);
         enriched += r.enriched;
         missing += r.missing;
       }
@@ -70,12 +70,12 @@ if (!isTest) {
       );
 
       const pending = await selectPendingFlashLoanOrders(
-        context, chainId, maxPerBlock, nextHexBucket(`flenrich:${chainId}`),
+        context, maxPerBlock, nextHexBucket(`flenrich:${chainId}`),
       );
       if (pending.length === 0) return;
 
       const { enriched, missing } = await enrichFlashLoanOrders(
-        context, chainId, await blockTimestamp(context, block), pending,
+        context, await blockTimestamp(context, block), pending,
       );
 
       if (!context.isPreload) {

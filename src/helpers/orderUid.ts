@@ -74,6 +74,7 @@ function decodeBalance(balanceHash: Hex): string {
  * The domain uses the GPv2Settlement contract address as verifyingContract.
  */
 export function computeOrderUid(
+  chainId: number,
   order: GPv2OrderData,
   owner: Hex,
 ): Hex {

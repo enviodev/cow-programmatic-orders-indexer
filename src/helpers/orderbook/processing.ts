@@ -107,7 +107,7 @@ export async function reconcileOpenCachedRows(
   const openUids = rows.filter((r) => !TERMINAL_STATUSES.has(r.status)).map((r) => r.orderUid);
   if (openUids.length === 0) return rows;
 
-  const refreshed = await fetchOrdersByUids(context, chainId, openUids);
+  const refreshed = await fetchOrdersByUids(context, openUids);
   if (refreshed.length === 0) return rows;
   const byUid = new Map(refreshed.map((o) => [o.uid, o]));
 
@@ -123,7 +123,7 @@ export async function reconcileOpenCachedRows(
   }
 
   if (newlyTerminal.length > 0) {
-    await upsertComposableCache(context, chainId, owner, newlyTerminal);
+    await upsertComposableCache(context, owner, newlyTerminal);
   }
   return rows;
 }

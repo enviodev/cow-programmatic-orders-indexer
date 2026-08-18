@@ -40,6 +40,7 @@ export interface PrecomputedOrder {
  * Returns null if the order type is not deterministic or params are missing.
  */
 export function precomputeOrderUids(
+  chainId: number,
   owner: Hex,
   orderType: OrderType,
   decodedParams: Record<string, string> | null,
@@ -80,11 +81,12 @@ export async function precomputeAndDiscover(
   decodedParams: Record<string, string> | null,
   blockTimestamp: bigint,
 ): Promise<boolean> {
+  const chainId = context.chain.id;
   const precomputed = precomputeOrderUids(chainId, owner, orderType, decodedParams, blockTimestamp);
   if (!precomputed || precomputed.length === 0) return false;
 
   const uids = precomputed.map((o) => o.orderUid);
-  const statuses = await fetchOrderStatusByUids(context, chainId, uids);
+  const statuses = await fetchOrderStatusByUids(context, uids);
 
   for (const order of precomputed) {
     const statusInfo = statuses.get(order.orderUid);
@@ -93,7 +95,7 @@ export async function precomputeAndDiscover(
 
     if (apiStatus) {
       // Known on the API → DiscreteOrder (upsert: status/validTo overwrite)
-      const id = `${chainId}_${order.orderUid}`;
+      const id = order.orderUid;
       const existing = await context.DiscreteOrder.get(id);
       if (existing) {
         context.DiscreteOrder.set({
@@ -105,7 +107,6 @@ export async function precomputeAndDiscover(
         context.DiscreteOrder.set({
           id,
           orderUid: order.orderUid,
-          chainId,
           conditionalOrderGenerator_id: generatorId,
           status: toDiscreteStatus(apiStatus),
           sellAmount: order.sellAmount,
@@ -120,13 +121,12 @@ export async function precomputeAndDiscover(
       }
     } else {
       // Not on the API yet → CandidateDiscreteOrder (insert-only)
-      const id = `${chainId}_${order.orderUid}`;
+      const id = order.orderUid;
       const existing = await context.CandidateDiscreteOrder.get(id);
       if (!existing) {
         context.CandidateDiscreteOrder.set({
           id,
           orderUid: order.orderUid,
-          chainId,
           conditionalOrderGenerator_id: generatorId,
           possibleValidAfterTimestamp: order.possibleValidAfterTimestamp != null
             ? BigInt(order.possibleValidAfterTimestamp)
@@ -189,6 +189,7 @@ export async function precomputeAndDiscover(
  * time from composableCow.cabinet(owner, ctx). We use event.block.timestamp.
  */
 function precomputeTwapUids(
+  chainId: number,
   owner: Hex,
   params: Record<string, string>,
   blockTimestamp: bigint,
@@ -287,6 +288,7 @@ function precomputeTwapUids(
  *   - sellTokenBalance = buyTokenBalance = ERC20
  */
 function precomputeStopLossUid(
+  chainId: number,
   owner: Hex,
   params: Record<string, string>,
 ): PrecomputedOrder[] | null {
@@ -351,6 +353,7 @@ function precomputeStopLossUid(
  *     sellTokenBalance = buyTokenBalance = BALANCE_ERC20 (all contract constants).
  */
 function precomputeCirclesBackingOrderUid(
+  chainId: number,
   owner: Hex,
   params: Record<string, string>,
 ): PrecomputedOrder[] | null {

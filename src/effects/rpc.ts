@@ -85,10 +85,11 @@ export const checkOrdersActive = createEffect(
     cache: false, // On-chain state changes between blocks
     rateLimit: { calls: 2, per: "second" as const },
   },
-  async ({ input }): Promise<string> => {
-    const client = getClient(input.chainId);
+  async ({ input, context }): Promise<string> => {
+    const chainId = context.chain.id;
+    const client = getClient(chainId);
     if (!client) return "[]"; // No RPC configured for this chain
-    const composableCowAddress = COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID[input.chainId];
+    const composableCowAddress = COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID[chainId];
     if (!composableCowAddress) return "[]";
     const orders = JSON.parse(input.ordersJson) as Array<{
       owner: string;
@@ -188,12 +189,13 @@ export const pollTradeableOrders = createEffect(
     cache: false, // on-chain state changes between blocks
     rateLimit: { calls: 5, per: "second" as const },
   },
-  async ({ input }): Promise<string> => {
+  async ({ input, context }): Promise<string> => {
     const orders = JSON.parse(input.ordersJson) as PollOrderInput[];
     if (orders.length === 0) return "[]";
 
-    const client = getClient(input.chainId);
-    const composableCowAddress = COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID[input.chainId];
+    const chainId = context.chain.id;
+    const client = getClient(chainId);
+    const composableCowAddress = COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID[chainId];
     if (!client || !composableCowAddress) {
       return JSON.stringify(orders.map(() => ({ status: "unavailable" })));
     }
@@ -310,8 +312,9 @@ export const scanAaveSettlement = createEffect(
     // being lost.
     rateLimit: { calls: 20, per: "second" as const },
   },
-  async ({ input }): Promise<string> => {
-    const { chainId, txHash, blockNumber } = input;
+  async ({ input, context }): Promise<string> => {
+    const { txHash, blockNumber } = input;
+    const chainId = context.chain.id;
     const client = getClient(chainId);
     if (!client) throw new SettlementScanUnavailableError("no-rpc", `ENVIO_RPC_URL_${chainId} unset`);
 
@@ -459,15 +462,15 @@ export const getBlockTimestamp = createEffect(
     cache: true,
     rateLimit: { calls: 10, per: "second" as const },
   },
-  async ({ input }): Promise<number | null> => {
+  async ({ input, context }): Promise<number | null> => {
     // Header reads come from HyperSync (no RPC quota); RPC is the fallback.
     try {
-      const ts = await hypersyncBlockTimestamp(input.chainId, input.blockNumber);
+      const ts = await hypersyncBlockTimestamp(context.chain.id, input.blockNumber);
       if (ts != null) return ts;
     } catch {
       // fall through to RPC
     }
-    const client = getClient(input.chainId);
+    const client = getClient(context.chain.id);
     if (!client) return null;
     try {
       const block = await withTimeout(
@@ -494,8 +497,8 @@ export const circlesImmutables = createEffect(
     cache: true, // contract immutables never change
     rateLimit: { calls: 5, per: "second" as const },
   },
-  async ({ input }): Promise<string | null> => {
-    const client = getClient(input.chainId);
+  async ({ input, context }): Promise<string | null> => {
+    const client = getClient(context.chain.id);
     if (!client) return null;
     const handler = input.handler as `0x${string}`;
 

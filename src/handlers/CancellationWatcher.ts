@@ -63,7 +63,6 @@ if (!isTest) {
         ordersJson: JSON.stringify(
           dueGenerators.map((g: { owner: string; hash: string }) => ({ owner: g.owner, hash: g.hash })),
         ),
-        chainId,
       });
       const results = JSON.parse(resultsJson) as Array<{
         hash: string;

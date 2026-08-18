@@ -89,13 +89,14 @@ export async function fetchComposableOrders(
   deadline?: number,
 ): Promise<{ orders: ComposableOrder[]; complete: boolean }> {
   const expired = () => deadline !== undefined && Date.now() >= deadline;
+  const chainId = context.chain.id;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
   if (!apiBaseUrl) {
     log("warn", "ob:noApiUrl", { chainId });
     return { orders: [], complete: false };
   }
 
-  const progressId = `${chainId}_${owner.toLowerCase()}`;
+  const progressId = owner.toLowerCase();
   const progress = await context.OwnerDrainProgress.get(progressId);
 
   let deltaCount = 0;
@@ -108,13 +109,13 @@ export async function fetchComposableOrders(
     log("info", "ob:fetch", { owner, chainId, phase: "history", offset: startOffset });
 
     const page = await fetchAccountHistoryPage(
-      context, chainId, owner, startOffset, DRAIN_PAGES_PER_FIRING,
+      context, owner, startOffset, DRAIN_PAGES_PER_FIRING,
     );
     if (expired()) return { orders: [], complete: false };
 
-    const delta = await matchHistoryRowsToGenerators(context, chainId, page.rows);
+    const delta = await matchHistoryRowsToGenerators(context, page.rows);
     if (expired()) return { orders: [], complete: false };
-    await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+    await upsertComposableCache(context, owner, delta.map(toCacheRow));
     deltaCount = delta.length;
 
     // Persist resume state — this is what makes retries converge. Only advance
@@ -122,7 +123,6 @@ export async function fetchComposableOrders(
     if (page.nextOffset > startOffset || page.complete) {
       context.OwnerDrainProgress.set({
         id: progressId,
-        chainId,
         owner: owner.toLowerCase(),
         nextOffset: page.nextOffset,
         complete: page.complete,
@@ -139,30 +139,30 @@ export async function fetchComposableOrders(
   }
 
   // Phase B — incremental delta drain from the creation-date cursor (uncached).
-  const cursor = await readOwnerBackfillCursor(context, chainId, owner);
+  const cursor = await readOwnerBackfillCursor(context, owner);
   log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
 
   const delta_ = await fetchAccountOrders(
-    context, chainId, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
+    context, owner, 0, SIGNING_SCHEME_EIP1271, PAGE_LIMIT, cursor,
   );
   if (expired()) return { orders: [], complete: false };
-  const delta = await filterAndProcess(context, chainId, delta_.orders);
+  const delta = await filterAndProcess(context, delta_.orders);
   if (expired()) return { orders: [], complete: false };
-  await upsertComposableCache(context, chainId, owner, delta.map(toCacheRow));
+  await upsertComposableCache(context, owner, delta.map(toCacheRow));
   deltaCount += delta.length;
   if (!delta_.complete) return { orders: [], complete: false };
 
   // Rebuild the full owner set from the durable cache (delta + everything older).
-  const cachedRows = await readOwnerComposableCache(context, chainId, owner);
+  const cachedRows = await readOwnerComposableCache(context, owner);
   if (expired()) return { orders: [], complete: false };
 
   // Re-check any still-open cached rows — long-lived orders that terminated
   // earlier would otherwise keep a stale "open" status forever.
-  const reconciled = await reconcileOpenCachedRows(context, chainId, owner, cachedRows);
+  const reconciled = await reconcileOpenCachedRows(context, owner, cachedRows);
   if (expired()) return { orders: [], complete: false };
 
   // Re-map by the stable hash to the current generator id.
-  const results = await remapToCurrentGenerators(context, chainId, reconciled);
+  const results = await remapToCurrentGenerators(context, reconciled);
 
   log("info", "ob:fetchResult", { owner, chainId, delta: deltaCount, total: results.length, complete: true });
   return { orders: results, complete: true };
@@ -180,7 +180,7 @@ export async function upsertDiscreteOrders(
 ): Promise<number> {
   if (orders.length === 0) return 0;
   for (const order of orders) {
-    const id = `${chainId}_${order.uid}`;
+    const id = order.uid;
     const existing = await context.DiscreteOrder.get(id);
     if (existing) {
       context.DiscreteOrder.set({
@@ -194,7 +194,6 @@ export async function upsertDiscreteOrders(
       context.DiscreteOrder.set({
         id,
         orderUid: order.uid,
-        chainId,
         conditionalOrderGenerator_id: order.generatorId,
         status: toDiscreteStatus(order.status),
         sellAmount: order.sellAmount,
@@ -225,11 +224,12 @@ export async function fetchOrderStatusByUids(
   const result = new Map<string, OrderStatusInfo>();
   if (uids.length === 0) return result;
 
+  const chainId = context.chain.id;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
   if (!apiBaseUrl) return result;
 
   // Check cache first
-  const cached = await getCachedUidStatuses(context, chainId, uids);
+  const cached = await getCachedUidStatuses(context, uids);
   const toFetch: string[] = [];
 
   for (const uid of uids) {
@@ -252,7 +252,7 @@ export async function fetchOrderStatusByUids(
     let fetched: OrderbookOrder[];
     try {
       fetched = await withTimeout(
-        fetchOrdersByUids(context, chainId, toFetch),
+        fetchOrdersByUids(context, toFetch),
         ORDERBOOK_BATCH_TIMEOUT_MS,
         "ob:statusByUids",
       );
@@ -291,7 +291,7 @@ export async function fetchOrderStatusByUids(
     }
 
     if (newTerminal.length > 0) {
-      await cacheUidStatuses(context, chainId, newTerminal);
+      await cacheUidStatuses(context, newTerminal);
     }
   }
 
@@ -310,9 +310,9 @@ export async function fetchOwnerOrderStatuses(
   maxPages = 3,
 ): Promise<Map<string, OrderStatusInfo>> {
   const result = new Map<string, OrderStatusInfo>();
-  const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
+  const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
   if (!apiBaseUrl) return result;
-  const { orders } = await fetchAccountOrders(context, chainId, owner, maxPages);
+  const { orders } = await fetchAccountOrders(context, owner, maxPages);
   for (const order of orders) {
     result.set(order.uid, {
       status: order.status,
@@ -337,11 +337,12 @@ export async function fetchFlashLoanEnrichmentByUids(
   const result = new Map<string, FlashLoanEnrichment>();
   if (uids.length === 0) return result;
 
+  const chainId = context.chain.id;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
   if (!apiBaseUrl) return result;
 
   // Cache first.
-  const cached = await getCachedFlashLoanEnrichment(context, chainId, uids);
+  const cached = await getCachedFlashLoanEnrichment(context, uids);
   const toFetch: string[] = [];
   for (const uid of uids) {
     const hit = cached.get(uid);
@@ -353,7 +354,7 @@ export async function fetchFlashLoanEnrichmentByUids(
   let fetched: OrderbookOrder[];
   try {
     fetched = await withTimeout(
-      fetchOrdersByUids(context, chainId, toFetch),
+      fetchOrdersByUids(context, toFetch),
       ORDERBOOK_BATCH_TIMEOUT_MS,
       "ob:flashLoanByUids",
     );
@@ -380,7 +381,7 @@ export async function fetchFlashLoanEnrichmentByUids(
   }
 
   if (newlyFetched.length > 0) {
-    await cacheFlashLoanEnrichment(context, chainId, newlyFetched);
+    await cacheFlashLoanEnrichment(context, newlyFetched);
   }
 
   return result;

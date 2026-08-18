@@ -46,7 +46,6 @@ if (!isTest) {
         let candidates: AaveSettlementCandidate[];
         try {
           const candidatesJson = await context.effect(scanAaveSettlement, {
-            chainId,
             txHash: scan.txHash,
             blockNumber: Number(scan.blockNumber),
           });
@@ -57,7 +56,7 @@ if (!isTest) {
         }
 
         await persistAaveCandidates(
-          context, chainId, scan.txHash, scan.blockNumber, scan.blockTimestamp, candidates,
+          context, scan.txHash, scan.blockNumber, scan.blockTimestamp, candidates,
         );
         context.PendingSettlementScan.deleteUnsafe(scan.id);
         recovered++;

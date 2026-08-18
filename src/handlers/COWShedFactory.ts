@@ -13,21 +13,19 @@ indexer.onEvent(
     const proxyAddress = shed.toLowerCase();
 
     context.Transaction.set({
-      id: `${chainId}_${event.transaction.hash}`,
+      id: event.transaction.hash,
       hash: event.transaction.hash,
-      chainId,
       blockNumber: BigInt(event.block.number),
       blockTimestamp: BigInt(event.block.timestamp),
     });
 
     // Insert-only (upstream onConflictDoNothing).
-    const id = `${chainId}_${proxyAddress}`;
+    const id = proxyAddress;
     const existing = await context.OwnerMapping.get(id);
     if (!existing) {
       context.OwnerMapping.set({
         id,
         address: proxyAddress,
-        chainId,
         owner: user.toLowerCase(),
         addressType: "cowshed_proxy",
         txHash: event.transaction.hash,

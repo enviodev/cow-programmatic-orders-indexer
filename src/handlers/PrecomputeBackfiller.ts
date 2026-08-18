@@ -63,7 +63,6 @@ if (!isTest) {
         if (Date.now() - start > FIRING_BUDGET_MS) break;
         await precomputeAndDiscover(
           context,
-          chainId,
           gen.id,
           gen.owner as Hex,
           gen.orderType as OrderType,

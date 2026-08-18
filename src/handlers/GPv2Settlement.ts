@@ -40,14 +40,13 @@ indexer.onEvent(
 
     let candidates: AaveSettlementCandidate[];
     try {
-      const candidatesJson = await context.effect(scanAaveSettlement, { chainId, txHash, blockNumber: event.block.number });
+      const candidatesJson = await context.effect(scanAaveSettlement, { txHash, blockNumber: event.block.number });
       candidates = JSON.parse(candidatesJson) as AaveSettlementCandidate[];
     } catch (err) {
       // Transport failure — queue for FlashLoanScanRetrier instead of losing
       // the settlement (upstream's behaviour) or caching the failure.
       context.PendingSettlementScan.set({
-        id: `${chainId}_${txHash}`,
-        chainId,
+        id: txHash,
         txHash,
         blockNumber,
         blockTimestamp,
@@ -59,6 +58,6 @@ indexer.onEvent(
       return;
     }
 
-    await persistAaveCandidates(context, chainId, txHash, blockNumber, blockTimestamp, candidates);
+    await persistAaveCandidates(context, txHash, blockNumber, blockTimestamp, candidates);
   },
 );

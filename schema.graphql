@@ -60,14 +60,14 @@ enum FlashLoanOrderKind {
 # ─── Tables ──────────────────────────────────────────────────────────────────
 
 type Transaction {
-  id: ID! # chainId + "_" + hash
+  id: ID! # tx hash (chainId auto-scoped)
   hash: String!
   blockNumber: BigInt! @index
   blockTimestamp: BigInt!
 }
 
 type ConditionalOrderGenerator {
-  id: ID! # chainId + "_" + blockNumber + "_" + logIndex (upstream: ponder event.id)
+  id: ID! # blockNumber + "_" + logIndex (chainId auto-scoped; upstream: ponder event.id)
   owner: String! @index # indexed address from event
   resolvedOwner: String @index # mapped EOA at insert time; falls back to owner if no mapping exists yet
   ownerAddressType: AddressType # null = direct EOA or Aave adapter not yet discovered
@@ -93,7 +93,7 @@ type ConditionalOrderGenerator {
 }
 
 type DiscreteOrder {
-  id: ID! # chainId + "_" + orderUid
+  id: ID! # orderUid (chainId auto-scoped)
   orderUid: String! @index
   conditionalOrderGenerator: ConditionalOrderGenerator!
   status: DiscreteOrderStatus! @index
@@ -108,7 +108,7 @@ type DiscreteOrder {
 }
 
 type CandidateDiscreteOrder {
-  id: ID! # chainId + "_" + orderUid
+  id: ID! # orderUid (chainId auto-scoped)
   orderUid: String! @index
   conditionalOrderGenerator: ConditionalOrderGenerator!
   sellAmount: String!
@@ -120,7 +120,7 @@ type CandidateDiscreteOrder {
 }
 
 type OwnerMapping {
-  id: ID! # chainId + "_" + address
+  id: ID! # address (chainId auto-scoped)
   address: String! @index # the proxy or helper contract address
   owner: String! @index # fully resolved owner (never an intermediate proxy)
   addressType: AddressType!
@@ -133,7 +133,7 @@ type OwnerMapping {
 # adapter (not ComposableCoW conditional orders). Executed-only: a row exists
 # iff the order settled. adapter <-> order is 1:1 (fresh CREATE2 per order).
 type FlashLoanOrder {
-  id: ID! # chainId + "_" + orderUid
+  id: ID! # orderUid (chainId auto-scoped)
   # ── From the Trade event (always present) ──
   orderUid: String! @index
   adapter: String! @index # the per-order Aave adapter (Trade event owner topic)
@@ -168,7 +168,7 @@ type FlashLoanOrder {
 # again and its flash-loan orders are lost. Here FlashLoanScanRetrier retries
 # them until the scan succeeds or the attempt cap is reached.
 type PendingSettlementScan {
-  id: ID! # chainId + "_" + txHash
+  id: ID! # txHash (chainId auto-scoped)
   txHash: String!
   blockNumber: BigInt!
   blockTimestamp: BigInt!
@@ -183,7 +183,7 @@ type PendingSettlementScan {
 # Per-UID cache of terminal order data. Used by both the discrete-order path
 # (status + executed amounts) and the flash-loan path (kind/receiver/intended).
 type OrderUidCache {
-  id: ID! # chainId + "_" + orderUid
+  id: ID! # orderUid (chainId auto-scoped)
   orderUid: String!
   status: String!
   fetchedAt: BigInt!
@@ -201,7 +201,7 @@ type OrderUidCache {
 # resumable: each firing fetches a bounded page window from nextOffset and
 # persists it, and `complete` flips once the last page is reached.
 type OwnerDrainProgress {
-  id: ID! # chainId + "_" + owner
+  id: ID! # owner (chainId auto-scoped)
   owner: String!
   nextOffset: Int!
   complete: Boolean!
@@ -212,7 +212,7 @@ type OwnerDrainProgress {
 # the delta newer than MAX(creationDate) per owner. Keyed by generator hash
 # (stable across redeploys), not the per-deployment generator id.
 type ComposableOrderCache {
-  id: ID! # chainId + "_" + orderUid
+  id: ID! # orderUid (chainId auto-scoped)
   orderUid: String!
   owner: String! @index
   generatorHash: String!

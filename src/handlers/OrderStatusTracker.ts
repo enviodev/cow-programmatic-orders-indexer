@@ -49,7 +49,7 @@ if (!isTest) {
 
       if (openOrders.length > 0) {
         const uids = openOrders.map((o: { orderUid: string }) => o.orderUid);
-        const statuses = await fetchOrderStatusByUids(context, chainId, uids);
+        const statuses = await fetchOrderStatusByUids(context, uids);
 
         let updated = 0;
         for (const order of openOrders) {

@@ -66,7 +66,7 @@ describe("ConditionalOrderCreated Handler", () => {
 
     // Transaction row upserted
     const tx = await indexer.Transaction.get(
-      "1_0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
     );
     expect(tx).toBeDefined();
     expect(tx!.chainId).toBe(1);
@@ -171,7 +171,7 @@ describe("ConditionalOrderCreated Handler", () => {
 
     const gen = (await indexer.ConditionalOrderGenerator.getAll())[0]!;
     // id is chainId_blockNumber_logIndex
-    expect(gen.id).toMatch(/^1_\d+_\d+$/);
+    expect(gen.id).toMatch(/^\d+_\d+$/);
     // Hash is keccak256 of the abi-encoded params tuple
     expect(gen.hash).toMatch(/^0x[a-f0-9]{64}$/);
     expect(gen.nextCheckBlock).toBe(17883050n);
@@ -253,7 +253,9 @@ describe("ConditionalOrderCreated Handler", () => {
                 user: eoaOwner as `0x${string}`,
                 shed: proxyAddress as `0x${string}`,
               },
-              block: { number: 17883050 },
+              // COWShedFactory mainnet startBlock is 22939254 — simulate items
+              // below a contract's start block are filtered before the handler.
+              block: { number: 22939254 },
             },
             {
               contract: "ComposableCoW",
@@ -266,7 +268,7 @@ describe("ConditionalOrderCreated Handler", () => {
                   staticInput: REAL_TWAP_STATIC_INPUT,
                 },
               },
-              block: { number: 17883051 },
+              block: { number: 22939255 },
             },
           ],
         },
@@ -328,7 +330,7 @@ describe("COWShedBuilt Handler", () => {
               contract: "COWShedFactory",
               event: "COWShedBuilt",
               params: { user: eoaOwner, shed: proxyAddress },
-              block: { number: 18000000 },
+              block: { number: 22939254 },
               transaction: {
                 hash: "0x1111111111111111111111111111111111111111111111111111111111111111",
               },
@@ -346,7 +348,7 @@ describe("COWShedBuilt Handler", () => {
     expect(mappings[0]!.resolutionDepth).toBe(0);
   });
 
-  it("should use chainId_proxyAddress as entity ID", async () => {
+  it("should use the proxy address as entity ID (chainId auto-scoped)", async () => {
     const indexer = createTestIndexer();
 
     await indexer.process({
@@ -360,6 +362,8 @@ describe("COWShedBuilt Handler", () => {
                 user: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 shed: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               },
+              // Above the Gnosis COWShedFactory startBlock (41469991).
+              block: { number: 41469991 },
             },
           ],
         },
@@ -367,7 +371,7 @@ describe("COWShedBuilt Handler", () => {
     });
 
     const mapping = (await indexer.OwnerMapping.getAll())[0]!;
-    expect(mapping.id).toBe("100_0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(mapping.id).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 });
 

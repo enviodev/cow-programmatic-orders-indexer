@@ -47,10 +47,10 @@ export async function enrichFlashLoanOrders(
   let enrichment: Awaited<ReturnType<typeof fetchFlashLoanEnrichmentByUids>>;
   try {
     enrichment = await fetchFlashLoanEnrichmentByUids(
-      context, chainId, rows.map((o: PendingFlashLoanRow) => o.orderUid),
+      context, rows.map((o: PendingFlashLoanRow) => o.orderUid),
     );
   } catch (err) {
-    log("warn", "FlashLoanEnrich:fetch_failed", { chainId, uids: rows.length, err: err instanceof Error ? err.message : String(err) });
+    log("warn", "FlashLoanEnrich:fetch_failed", { chainId: context.chain.id, uids: rows.length, err: err instanceof Error ? err.message : String(err) });
     return { enriched: 0, missing: 0 }; // leave pending — retried on a later block
   }
 

@@ -115,7 +115,6 @@ if (!isTest) {
       }
 
       const resultsJson = await context.effect(pollTradeableOrders, {
-        chainId,
         ordersJson: JSON.stringify(
           dueOrders.map((o) => ({
             owner: o.owner,
@@ -167,13 +166,12 @@ if (!isTest) {
           }
 
           // Insert-only (upstream onConflictDoNothing).
-          const candidateId = `${chainId}_${orderUid}`;
+          const candidateId = orderUid;
           const existingCandidate = await context.CandidateDiscreteOrder.get(candidateId);
           if (!existingCandidate) {
             context.CandidateDiscreteOrder.set({
               id: candidateId,
               orderUid,
-              chainId,
               conditionalOrderGenerator_id: order.id,
               possibleValidAfterTimestamp,
               sellAmount: orderData.sellAmount.toString(),

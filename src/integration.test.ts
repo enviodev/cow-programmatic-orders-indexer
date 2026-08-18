@@ -76,7 +76,7 @@ describe("ConditionalOrderGenerator creation", () => {
     const generators = await indexer.ConditionalOrderGenerator.getAll();
     const txs = await indexer.Transaction.getAll();
     expect(txs.length).toBeGreaterThanOrEqual(1);
-    expect(txs[0]!.id).toBe(`1_${generators[0]!.txHash}`);
+    expect(txs[0]!.id).toBe(generators[0]!.txHash);
   }, 60_000);
 
   it("should index generators on Gnosis Chain", async () => {
@@ -122,7 +122,7 @@ describe("COWShed proxy creation", () => {
     expect(proxy!.owner).toBe("0x9fa3c00a92ec5f96b1ad2527ab41b3932efeda58");
     expect(proxy!.chainId).toBe(1);
     expect(proxy!.addressType).toBe("cowshed_proxy");
-    expect(proxy!.id).toBe(`1_${proxy!.address}`);
+    expect(proxy!.id).toBe(proxy!.address);
   }, 60_000);
 
   it("should create multiple OwnerMapping entities from batch deployment", async () => {

@@ -30,7 +30,6 @@ export async function fetchAccountHistoryPage(
   pageSize = PAGE_LIMIT,
 ): Promise<{ rows: HistoryPageRow[]; complete: boolean; nextOffset: number }> {
   const json = await context.effect(orderbookAccountHistoryPage, {
-    chainId,
     owner,
     maxPages,
     pageSize,
@@ -53,7 +52,6 @@ export async function fetchAccountOrders(
   startOffset = 0,
 ): Promise<{ orders: OrderbookOrder[]; complete: boolean; nextOffset: number }> {
   const json = await context.effect(orderbookAccountOrders, {
-    chainId,
     owner,
     maxPages,
     signingScheme,
@@ -72,7 +70,6 @@ export async function fetchOrdersByUids(
 ): Promise<OrderbookOrder[]> {
   if (uids.length === 0) return [];
   const json = await context.effect(orderbookOrdersByUids, {
-    chainId,
     uidsJson: JSON.stringify(uids),
   });
   return JSON.parse(json) as OrderbookOrder[];

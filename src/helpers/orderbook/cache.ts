@@ -35,7 +35,8 @@ export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
   };
 }
 
-const uidCacheId = (uid: string): string => `${chainId}_${uid}`;
+// Entity ids are the bare orderUid — envio keys rows by (id, chainId) under
+// disable_default_cross_chain, so the old `${chainId}_` prefix is redundant.
 
 /** Read cached flash-loan enrichment for a list of UIDs. */
 export async function getCachedFlashLoanEnrichment(
@@ -47,7 +48,7 @@ export async function getCachedFlashLoanEnrichment(
   if (uids.length === 0) return result;
 
   const rows = await Promise.all(
-    uids.map((uid) => context.OrderUidCache.get(uidCacheId(chainId, uid))),
+    uids.map((uid) => context.OrderUidCache.get(uid)),
   );
   for (const row of rows) {
     if (!row) continue;
@@ -81,12 +82,10 @@ export async function cacheFlashLoanEnrichment(
   const now = BigInt(Math.floor(Date.now() / 1000));
   try {
     for (const { uid, enrichment } of entries) {
-      const id = uidCacheId(chainId, uid);
-      const existing = await context.OrderUidCache.get(id);
+      const existing = await context.OrderUidCache.get(uid);
       if (existing) continue; // onConflictDoNothing
       context.OrderUidCache.set({
-        id,
-        chainId,
+        id: uid,
         orderUid: uid,
         status: "fulfilled",
         fetchedAt: now,
@@ -99,7 +98,7 @@ export async function cacheFlashLoanEnrichment(
       });
     }
   } catch (err) {
-    log("warn", "ob:flashLoanCacheWriteFailed", { chainId, entries: entries.length, err: String(err) });
+    log("warn", "ob:flashLoanCacheWriteFailed", { chainId: context.chain.id, entries: entries.length, err: String(err) });
   }
 }
 
@@ -113,7 +112,7 @@ export async function getCachedUidStatuses(
   if (uids.length === 0) return result;
 
   const rows = await Promise.all(
-    uids.map((uid) => context.OrderUidCache.get(uidCacheId(chainId, uid))),
+    uids.map((uid) => context.OrderUidCache.get(uid)),
   );
   for (const row of rows) {
     if (!row) continue;
@@ -136,13 +135,11 @@ export async function cacheUidStatuses(
   if (orders.length === 0) return;
   const now = BigInt(Math.floor(Date.now() / 1000));
   for (const order of orders) {
-    const id = uidCacheId(chainId, order.uid);
-    const existing = await context.OrderUidCache.get(id);
+    const existing = await context.OrderUidCache.get(order.uid);
     context.OrderUidCache.set({
       // Preserve any flash-loan enrichment columns already on the row.
       ...(existing ?? { kind: undefined, receiver: undefined, sellAmount: undefined, buyAmount: undefined }),
-      id,
-      chainId,
+      id: order.uid,
       orderUid: order.uid,
       status: order.status,
       fetchedAt: now,
@@ -209,8 +206,7 @@ export async function upsertComposableCache(
   try {
     for (const r of rows) {
       context.ComposableOrderCache.set({
-        id: `${chainId}_${r.orderUid}`,
-        chainId,
+        id: r.orderUid,
         orderUid: r.orderUid,
         owner: owner.toLowerCase(),
         generatorHash: r.generatorHash,
@@ -227,6 +223,6 @@ export async function upsertComposableCache(
       });
     }
   } catch (err) {
-    log("warn", "ob:composableCacheWriteFailed", { chainId, rows: rows.length, err: String(err) });
+    log("warn", "ob:composableCacheWriteFailed", { chainId: context.chain.id, rows: rows.length, err: String(err) });
   }
 }

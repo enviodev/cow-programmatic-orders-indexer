@@ -94,11 +94,11 @@ async function drainOwnerBatch(
       // after this handler has resolved.
       const deadline = Date.now() + BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS;
       const { orders, complete } = await withTimeout(
-        fetchComposableOrders(context, chainId, owner, deadline),
+        fetchComposableOrders(context, owner, deadline),
         BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
         `OwnerBackfill:owner:${owner}`,
       );
-      discovered += await upsertDiscreteOrders(context, chainId, orders);
+      discovered += await upsertDiscreteOrders(context, orders);
 
       // Only flip the flag when the owner's history was drained in full. A partial
       // drain (rate limit / timeout) leaves the owner eligible → retried next block.

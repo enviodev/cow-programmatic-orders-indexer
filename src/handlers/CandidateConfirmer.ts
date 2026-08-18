@@ -32,7 +32,7 @@ async function promoteCandidate(
   promotedAt: bigint,
   insertOnly: boolean,
 ): Promise<void> {
-  const id = `${chainId}_${candidate.orderUid}`;
+  const id = candidate.orderUid;
   const existing = await context.DiscreteOrder.get(id);
   if (existing) {
     if (insertOnly) return;
@@ -47,7 +47,6 @@ async function promoteCandidate(
     context.DiscreteOrder.set({
       id,
       orderUid: candidate.orderUid,
-      chainId,
       conditionalOrderGenerator_id: candidate.conditionalOrderGenerator_id,
       status: toDiscreteStatus(status),
       sellAmount: candidate.sellAmount,
@@ -104,7 +103,7 @@ if (!isTest) {
         let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>>;
         try {
           preflightStatuses = await withTimeout(
-            fetchOrderStatusByUids(context, chainId, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
+            fetchOrderStatusByUids(context, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
             ORDERBOOK_BATCH_TIMEOUT_MS,
             "CandidateConfirmer:cascade:preflight",
           );
@@ -115,7 +114,7 @@ if (!isTest) {
         for (const c of orphanCandidates) {
           const apiEntry = preflightStatuses.get(c.orderUid);
           await promoteCandidate(
-            context, chainId, c,
+            context, c,
             apiEntry?.status ?? "cancelled",
             apiEntry?.executedSellAmount ?? null,
             apiEntry?.executedBuyAmount ?? null,
@@ -140,10 +139,10 @@ if (!isTest) {
           (c.validTo == null || c.validTo > currentTimestamp),
       );
 
-      if (unconfirmed.length === 0) return;      if (unconfirmed.length === 0) return;
+      if (unconfirmed.length === 0) return;
 
       const uids = unconfirmed.map((c: CandidateRow) => c.orderUid);
-      const statuses = await fetchOrderStatusByUids(context, chainId, uids);
+      const statuses = await fetchOrderStatusByUids(context, uids);
 
       let confirmed = 0;
       for (const candidate of unconfirmed) {
@@ -151,7 +150,7 @@ if (!isTest) {
         if (!orderbookEntry) continue; // not on API yet — retry next block
 
         await promoteCandidate(
-          context, chainId, candidate,
+          context, candidate,
           orderbookEntry.status,
           orderbookEntry.executedSellAmount,
           orderbookEntry.executedBuyAmount,
@@ -172,7 +171,7 @@ if (!isTest) {
 
       if (stale.length > 0) {
         const staleStatuses = await fetchOrderStatusByUids(
-          context, chainId, stale.map((c: CandidateRow) => c.orderUid),
+          context, stale.map((c: CandidateRow) => c.orderUid),
         );
 
         // TWAP parts can age out of /by_uids before CandidateConfirmer sees them.
@@ -199,7 +198,7 @@ if (!isTest) {
           for (const [owner, ownerMissedUids] of missedByOwner) {
             try {
               const ownerStatuses = await withTimeout(
-                fetchOwnerOrderStatuses(context, chainId, owner),
+                fetchOwnerOrderStatuses(context, owner),
                 BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
                 "CandidateConfirmer:stale:accountFallback",
               );
@@ -215,7 +214,7 @@ if (!isTest) {
         for (const c of stale) {
           const entry = staleStatuses.get(c.orderUid);
           await promoteCandidate(
-            context, chainId, c,
+            context, c,
             entry?.status ?? "expired",
             entry?.executedSellAmount ?? null,
             entry?.executedBuyAmount ?? null,

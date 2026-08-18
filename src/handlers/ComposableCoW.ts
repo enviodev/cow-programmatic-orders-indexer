@@ -65,7 +65,7 @@ async function insertGenerator(
 
   const ownerAddress = owner.toLowerCase() as `0x${string}`;
   const chainId = event.chainId as number;
-  const generatorId = `${chainId}_${event.block.number}_${event.logIndex}`;
+  const generatorId = `${event.block.number}_${event.logIndex}`;
   const orderType = getOrderTypeFromHandler(handler, chainId);
 
   if (orderType === "Unknown") {
@@ -102,7 +102,6 @@ async function insertGenerator(
 
       if (orderType === "CirclesBackingOrder" && decodedParams) {
         const immutablesJson = await context.effect(circlesImmutables, {
-          chainId,
           handler: handler.toLowerCase(),
         });
         if (immutablesJson) {
@@ -122,15 +121,14 @@ async function insertGenerator(
 
   // Resolve EOA: look up OwnerMapping in case owner is a known proxy (CoWShed).
   // For Aave adapters the mapping won't exist yet; the settlement handler backfills later.
-  const mapping = await context.OwnerMapping.get(`${chainId}_${ownerAddress}`);
+  const mapping = await context.OwnerMapping.get(ownerAddress);
   const resolvedOwner = mapping ? mapping.owner : ownerAddress;
   const ownerAddressType = mapping ? mapping.addressType : undefined;
 
   // Upsert transaction row (idempotent — multiple events may share a tx)
   context.Transaction.set({
-    id: `${chainId}_${event.transaction.hash}`,
+    id: event.transaction.hash,
     hash: event.transaction.hash,
-    chainId,
     blockNumber: BigInt(event.block.number),
     blockTimestamp: BigInt(event.block.timestamp),
   });
@@ -141,7 +139,6 @@ async function insertGenerator(
   if (!existing) {
     context.ConditionalOrderGenerator.set({
       id: generatorId,
-      chainId,
       owner: ownerAddress,
       resolvedOwner,
       ownerAddressType,
@@ -151,7 +148,7 @@ async function insertGenerator(
       hash,
       orderType,
       status: "Active",
-      decodedParams,
+      decodedParams: decodedParams ?? undefined,
       decodeError: decodeError ?? undefined,
       txHash: event.transaction.hash,
       allCandidatesKnown: false,
@@ -171,7 +168,7 @@ async function insertGenerator(
     });
   }
 
-    return { generatorId, ownerAddress, chainId, decodedParams, orderType };
+  return { generatorId, ownerAddress, decodedParams, orderType };
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -183,7 +180,7 @@ indexer.onEvent(
   async ({ event, context }) => {
     // Tests process pinned historical ranges but assert live semantics.
     const isLive = context.chain.isRealtime || isTestEnv;
-    const { generatorId, ownerAddress, chainId, decodedParams, orderType } =
+    const { generatorId, ownerAddress, decodedParams, orderType } =
       await insertGenerator(event, context, isLive);
 
     // Pre-compute UIDs for deterministic order types (TWAP, StopLoss,
@@ -192,7 +189,7 @@ indexer.onEvent(
     // tip so the chain backfill never blocks on orderbook I/O.
     if (isLive) {
       await precomputeAndDiscover(
-        context, chainId, generatorId, ownerAddress, orderType, decodedParams,
+        context, generatorId, ownerAddress, orderType, decodedParams,
         BigInt(event.block.timestamp),
       );
     }

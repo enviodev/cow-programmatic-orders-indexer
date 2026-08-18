@@ -257,8 +257,8 @@ export const orderbookAccountOrders = createEffect(
     // Account pages are heavy (up to 3.6MB), so stay well under: 40/min.
     rateLimit: { calls: 40, per: "minute" as const },
   },
-  async ({ input }): Promise<string> => {
-    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+  async ({ input, context }): Promise<string> => {
+    const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
     if (!apiBaseUrl) return JSON.stringify({ orders: [], complete: false, nextOffset: input.offset ?? 0 });
     const result = await fetchAccountOrdersRaw(
       apiBaseUrl,
@@ -317,8 +317,8 @@ export const orderbookAccountHistoryPage = createEffect(
     cache: true,
     rateLimit: { calls: 20, per: "second" as const },
   },
-  async ({ input }): Promise<string> => {
-    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+  async ({ input, context }): Promise<string> => {
+    const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
     if (!apiBaseUrl) return JSON.stringify({ rows: [], complete: false, nextOffset: input.offset });
     const result = await fetchAccountOrdersRaw(
       apiBaseUrl,
@@ -382,8 +382,8 @@ export const orderbookOrdersByUids = createEffect(
     // At 100 UIDs per request that is still 8,000 statuses/min.
     rateLimit: { calls: 80, per: "minute" as const },
   },
-  async ({ input }): Promise<string> => {
-    const apiBaseUrl = ORDERBOOK_API_URLS[input.chainId];
+  async ({ input, context }): Promise<string> => {
+    const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
     if (!apiBaseUrl) return "[]";
     const uids = JSON.parse(input.uidsJson) as string[];
     const orders = await fetchOrdersByUidsRaw(apiBaseUrl, uids);
