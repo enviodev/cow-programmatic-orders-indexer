@@ -93,6 +93,10 @@ export interface ComposableCacheRow {
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
   executedFee: string | null;
+  /** Read-side trust fields (see trust.ts) — absent on freshly-decoded rows. */
+  terminalSince?: number | null;
+  fetchedAt?: number | null;
+  cacheVersion?: number | null;
 }
 
 /** Cached order data returned by getCachedUidStatuses. */
@@ -101,6 +105,10 @@ export interface CachedOrderData {
   executedSellAmount: string | null;
   executedBuyAmount: string | null;
   executedFee: string | null;
+  validTo: number | null;
+  terminalSince: number | null;
+  fetchedAt: number | null;
+  cacheVersion: number | null;
 }
 
 export const TERMINAL_STATUSES = new Set(["fulfilled", "expired", "cancelled"]);

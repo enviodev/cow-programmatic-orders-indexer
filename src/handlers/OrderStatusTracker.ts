@@ -5,7 +5,11 @@
  */
 
 import { indexer } from "envio";
-import { DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK } from "../constants.js";
+import {
+  DEFAULT_MAX_DISCRETE_ORDERS_PER_BLOCK,
+  DEFAULT_REORG_SAFETY_WINDOW_SECONDS,
+} from "../constants.js";
+import { REORG_SAFETY_WINDOW_SECONDS } from "../data.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
@@ -78,6 +82,98 @@ if (!isTest) {
 
         if (updated > 0 && !context.isPreload) {
           log("info", "OrderStatusTracker:DONE", { block: String(block.number), chainId, open: openOrders.length, updated });
+        }
+      }
+
+      // ── Soft-terminal re-poll (reorg self-healing — COW-1183) ──────────────
+      // A terminal status written before a fork block can outlive the reorg
+      // (the durable caches sit outside the rollback journal, and terminal
+      // rows were never re-fetched). Terminal rows are therefore re-polled
+      // until the trust rule (orderbook/trust.ts) hardens them:
+      // fetchOrderStatusByUids serves hardened rows straight from cache, so
+      // only genuinely soft rows cost HTTP. Open orders keep priority under
+      // the per-block cap. Cascade-cancelled rows are excluded — their truth
+      // is the parent's on-chain Cancelled event and the API is silent about
+      // them, so polling would ping-pong them back to open.
+      const softBudget = maxOrdersPerBlock - openOrders.length;
+      if (softBudget > 0) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const window =
+          REORG_SAFETY_WINDOW_SECONDS[chainId] ?? DEFAULT_REORG_SAFETY_WINDOW_SECONDS;
+
+        // validTo older than the window can't change anymore (fills are
+        // impossible after validTo) — the candidate set is only
+        // recently-terminal rows in this bucket. getWhere has no IS NULL, so
+        // null-validTo rows are skipped (rare: writes carry validTo except
+        // when the API itself returned none).
+        const softAll = await context.DiscreteOrder.getWhere({
+          status: { _in: ["Fulfilled", "Cancelled", "Expired"] },
+          orderUid: bucket,
+          validTo: { _gte: BigInt(Math.max(0, nowSeconds - window)) },
+        });
+        const softGens = await Promise.all(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          softAll.map((o: any) => context.ConditionalOrderGenerator.get(o.conditionalOrderGenerator_id)),
+        );
+        const softCandidates = softAll
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((_: any, i: number) => (softGens[i] as any)?.status !== "Cancelled")
+          .slice(0, softBudget);
+
+        if (softCandidates.length > 0) {
+          const softStatuses = await fetchOrderStatusByUids(
+            context,
+            softCandidates.map((o: { orderUid: string }) => o.orderUid),
+          );
+
+          let reverted = 0;
+          let flipped = 0;
+          const touchedGeneratorIds: string[] = [];
+
+          for (const order of softCandidates) {
+            const info = softStatuses.get(order.orderUid);
+            if (!info || toDiscreteStatus(info.status) === order.status) continue;
+            if (info.status === "open") {
+              // Reorg revert — back to open so the normal poll loop
+              // re-resolves it. Skip when validTo already passed: the expiry
+              // sweep owns that row. Executed amounts came from the
+              // reorged-out settlement — clear them; a later fill
+              // re-populates via the open-order loop.
+              if (order.validTo != null && order.validTo <= currentTimestamp) continue;
+              context.DiscreteOrder.set({
+                ...order,
+                status: "Open",
+                executedSellAmount: undefined,
+                executedBuyAmount: undefined,
+                executedFee: undefined,
+                updatedAtBlock: currentBlock,
+              });
+              touchedGeneratorIds.push(order.conditionalOrderGenerator_id);
+              reverted++;
+            } else if (VALID_DISCRETE_STATUSES.has(info.status)) {
+              // Terminal-to-terminal flip. Null amounts (cache-served
+              // fallbacks) keep existing values, mirroring the coalesce
+              // semantics of the open-order upsert.
+              context.DiscreteOrder.set({
+                ...order,
+                status: toDiscreteStatus(info.status),
+                executedSellAmount: info.executedSellAmount ?? order.executedSellAmount,
+                executedBuyAmount: info.executedBuyAmount ?? order.executedBuyAmount,
+                executedFee: info.executedFee ?? order.executedFee,
+                updatedAtBlock: currentBlock,
+              });
+              touchedGeneratorIds.push(order.conditionalOrderGenerator_id);
+              flipped++;
+            }
+          }
+
+          if (touchedGeneratorIds.length > 0) {
+            await bumpGeneratorsUpdatedAt(context, touchedGeneratorIds, currentBlock);
+            await refreshTwapExecutedTotals(context, touchedGeneratorIds);
+            if (!context.isPreload) {
+              log("info", "OrderStatusTracker:REORG_HEAL", { block: String(block.number), chainId, reverted, flipped });
+            }
+          }
         }
       }
 

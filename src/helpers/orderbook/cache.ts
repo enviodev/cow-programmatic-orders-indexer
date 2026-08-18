@@ -9,7 +9,10 @@
  */
 
 import { type Hex } from "viem";
+import { CACHE_VERSION, DEFAULT_REORG_SAFETY_WINDOW_SECONDS } from "../../constants.js";
+import { REORG_SAFETY_WINDOW_SECONDS } from "../../data.js";
 import { log } from "../logger.js";
+import { classifyCachedRow } from "./trust.js";
 import { type OrderType } from "../../utils/order-types.js";
 import {
   type CachedOrderData,
@@ -40,7 +43,9 @@ export function toCacheRow(o: ComposableOrder): ComposableCacheRow {
 // Entity ids are the bare orderUid — envio keys rows by (id, chainId) under
 // disable_default_cross_chain, so the old `${chainId}_` prefix is redundant.
 
-/** Read cached flash-loan enrichment for a list of UIDs. */
+/** Read cached flash-loan enrichment for a list of UIDs. Only rows the trust
+ *  rule considers final are served — soft rows (recently settled, or written
+ *  by an older cache version) fall through to a fresh fetch that re-caches. */
 export async function getCachedFlashLoanEnrichment(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -48,6 +53,9 @@ export async function getCachedFlashLoanEnrichment(
 ): Promise<Map<string, FlashLoanEnrichment>> {
   const result = new Map<string, FlashLoanEnrichment>();
   if (uids.length === 0) return result;
+  const window =
+    REORG_SAFETY_WINDOW_SECONDS[context.chain.id] ?? DEFAULT_REORG_SAFETY_WINDOW_SECONDS;
+  const now = Math.floor(Date.now() / 1000);
 
   const rows = await Promise.all(
     uids.map((uid) => context.OrderUidCache.get(uid)),
@@ -57,6 +65,7 @@ export async function getCachedFlashLoanEnrichment(
     // Skip discrete rows that lack enrichment (kind/amounts null). In practice
     // the UID sets are disjoint, so this only guards against accidental overlap.
     if (row.kind == null || row.sellAmount == null || row.buyAmount == null) continue;
+    if (classifyCachedRow(toTrustInputs(row), now, window) !== "trusted") continue;
     result.set(row.orderUid, {
       receiver: row.receiver ?? null,
       kind: row.kind as "sell" | "buy",
@@ -71,32 +80,41 @@ export async function getCachedFlashLoanEnrichment(
 }
 
 /**
- * Persist flash-loan enrichment into the shared cache (terminal, so cached
- * indefinitely). status is set to "fulfilled" — flash-loan orders are settled
- * by definition. Insert-only (upstream onConflictDoNothing).
+ * Persist flash-loan enrichment into the shared cache. status is set to
+ * "fulfilled" — flash-loan orders are settled by definition.
+ * Upsert (not insert-only): soft rows are re-fetched until the trust rule
+ * hardens them, and each re-fetch must advance fetchedAt (the cooling-off
+ * anchor) and refresh amounts a reorg may have changed. terminalSince
+ * survives same-status re-fetches so the cooling-off clock isn't reset.
  */
 export async function cacheFlashLoanEnrichment(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
-  entries: { uid: string; enrichment: FlashLoanEnrichment }[],
+  entries: { uid: string; enrichment: FlashLoanEnrichment; validTo: number | null }[],
 ): Promise<void> {
   if (entries.length === 0) return;
   const now = BigInt(Math.floor(Date.now() / 1000));
   try {
-    for (const { uid, enrichment } of entries) {
+    for (const { uid, enrichment, validTo } of entries) {
       const existing = await context.OrderUidCache.get(uid);
-      if (existing) continue; // onConflictDoNothing
       context.OrderUidCache.set({
+        ...(existing ?? {}),
         id: uid,
         orderUid: uid,
         status: "fulfilled",
         fetchedAt: now,
         executedSellAmount: enrichment.executedSellAmount,
         executedBuyAmount: enrichment.executedBuyAmount,
-        kind: enrichment.kind,
-        receiver: enrichment.receiver ?? undefined,
-        sellAmount: enrichment.sellAmount,
-        buyAmount: enrichment.buyAmount,
+        kind: existing?.kind ?? enrichment.kind,
+        receiver: existing?.receiver ?? enrichment.receiver ?? undefined,
+        sellAmount: existing?.sellAmount ?? enrichment.sellAmount,
+        buyAmount: existing?.buyAmount ?? enrichment.buyAmount,
+        validTo: validTo != null ? BigInt(validTo) : existing?.validTo,
+        terminalSince:
+          existing && existing.status === "fulfilled" && existing.terminalSince != null
+            ? existing.terminalSince
+            : now,
+        cacheVersion: CACHE_VERSION,
       });
     }
   } catch (err) {
@@ -123,13 +141,19 @@ export async function getCachedUidStatuses(
       executedSellAmount: row.executedSellAmount ?? null,
       executedBuyAmount: row.executedBuyAmount ?? null,
       executedFee: row.executedFee ?? null,
+      validTo: row.validTo != null ? Number(row.validTo) : null,
+      terminalSince: row.terminalSince != null ? Number(row.terminalSince) : null,
+      fetchedAt: row.fetchedAt != null ? Number(row.fetchedAt) : null,
+      cacheVersion: row.cacheVersion ?? null,
     });
   }
 
   return result;
 }
 
-/** Cache terminal statuses and executed amounts for composable orders (upsert). */
+/** Cache terminal statuses and executed amounts for composable orders (upsert).
+ *  terminalSince survives same-status re-fetches (it anchors the cooling-off
+ *  rule in trust.ts) and resets when the status actually changed. */
 export async function cacheUidStatuses(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -149,8 +173,47 @@ export async function cacheUidStatuses(
       executedSellAmount: order.executedSellAmount?.toString() ?? undefined,
       executedBuyAmount: order.executedBuyAmount?.toString() ?? undefined,
       executedFee: order.executedFee?.toString() ?? undefined,
+      validTo: order.validTo != null ? BigInt(order.validTo) : undefined,
+      terminalSince:
+        existing && existing.status === order.status && existing.terminalSince != null
+          ? existing.terminalSince
+          : now,
+      cacheVersion: CACHE_VERSION,
     });
   }
+}
+
+/** Drop cache rows whose terminal status a fresh fetch just contradicted
+ *  (reorg revert: the API says the order is open again). The next fetch
+ *  re-caches whatever the API settles on. */
+export async function deleteUidCacheEntries(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  uids: string[],
+): Promise<void> {
+  if (uids.length === 0) return;
+  for (const uid of uids) {
+    context.OrderUidCache.deleteUnsafe(uid);
+  }
+  log("info", "ob:cacheRevert", { chainId: context.chain.id, uids: uids.length });
+}
+
+/** Map an OrderUidCache entity row into trust.ts inputs (bigint -> number). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toTrustInputs(row: any): {
+  status: string;
+  validTo: number | null;
+  terminalSince: number | null;
+  fetchedAt: number | null;
+  cacheVersion: number | null;
+} {
+  return {
+    status: row.status,
+    validTo: row.validTo != null ? Number(row.validTo) : null,
+    terminalSince: row.terminalSince != null ? Number(row.terminalSince) : null,
+    fetchedAt: row.fetchedAt != null ? Number(row.fetchedAt) : null,
+    cacheVersion: row.cacheVersion ?? null,
+  };
 }
 
 // ─── Durable composable-order cache helpers ───────────────────────────────────
@@ -180,10 +243,14 @@ export async function readOwnerComposableCache(
     executedSellAmount: row.executedSellAmount ?? null,
     executedBuyAmount: row.executedBuyAmount ?? null,
     executedFee: row.executedFee ?? null,
+    terminalSince: row.terminalSince != null ? Number(row.terminalSince) : null,
+    fetchedAt: row.fetchedAt != null ? Number(row.fetchedAt) : null,
+    cacheVersion: row.cacheVersion ?? null,
   }));
 }
 
-/** Upsert durable composable rows; status/validTo/executed overwrite on conflict. */
+/** Upsert durable composable rows; status/validTo/executed overwrite on conflict.
+ *  terminalSince survives same-status re-writes (trust.ts cooling-off anchor). */
 export async function upsertComposableCache(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
@@ -194,6 +261,8 @@ export async function upsertComposableCache(
   const now = BigInt(Math.floor(Date.now() / 1000));
   try {
     for (const r of rows) {
+      const existing = await context.ComposableOrderCache.get(r.orderUid);
+      const isTerminal = r.status === "fulfilled" || r.status === "expired" || r.status === "cancelled";
       context.ComposableOrderCache.set({
         id: r.orderUid,
         orderUid: r.orderUid,
@@ -210,6 +279,12 @@ export async function upsertComposableCache(
         executedBuyAmount: r.executedBuyAmount ?? undefined,
         executedFee: r.executedFee ?? undefined,
         fetchedAt: now,
+        terminalSince: !isTerminal
+          ? undefined
+          : existing && existing.status === r.status && existing.terminalSince != null
+            ? existing.terminalSince
+            : now,
+        cacheVersion: CACHE_VERSION,
       });
     }
   } catch (err) {

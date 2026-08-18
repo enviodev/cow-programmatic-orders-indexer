@@ -6,8 +6,9 @@
 
 import { encodeAbiParameters, keccak256, type Hex } from "viem";
 import { type OrderType } from "../../utils/order-types.js";
-import { COMPOSABLE_COW_HANDLER_ADDRESSES } from "../../data.js";
-import { SIGNING_SCHEME_EIP1271 } from "../../constants.js";
+import { COMPOSABLE_COW_HANDLER_ADDRESSES, REORG_SAFETY_WINDOW_SECONDS } from "../../data.js";
+import { DEFAULT_REORG_SAFETY_WINDOW_SECONDS, SIGNING_SCHEME_EIP1271 } from "../../constants.js";
+import { classifyCachedRow } from "./trust.js";
 import { decodeEip1271Signature } from "../../decoders/erc1271-signature.js";
 import { fetchOrdersByUids } from "./http.js";
 import { upsertComposableCache } from "./cache.js";
@@ -98,31 +99,43 @@ export async function filterAndProcess(
   return results;
 }
 
-/** Re-check non-terminal cached rows via by_uids; update status/validTo/executed and
- *  re-persist any that became terminal. Mutates and returns `rows`.
- *  Fulfilled rows with a null executedFee are also re-checked: they were cached
- *  before the executedFee column existed and would otherwise stay stale forever
- *  (terminal rows are never re-fetched). Expired/cancelled rows are left alone —
- *  nothing was executed, so a null fee there is harmless. */
+/** Re-check cached rows the trust rule doesn't consider final (open rows, and
+ *  terminal rows still inside the chain's reorg window or written by an older
+ *  cache version — see trust.ts) via by_uids; update status/validTo/executed
+ *  and re-persist every row the fetch touched, including terminal statuses a
+ *  reorg reverted back to open. Mutates and returns `rows`. */
 export async function reconcileOpenCachedRows(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
   owner: Hex,
   rows: ComposableCacheRow[],
 ): Promise<ComposableCacheRow[]> {
-  const openUids = rows
+  const window =
+    REORG_SAFETY_WINDOW_SECONDS[context.chain.id] ?? DEFAULT_REORG_SAFETY_WINDOW_SECONDS;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  const staleUids = rows
     .filter((r) =>
-      !TERMINAL_STATUSES.has(r.status) ||
-      (r.status === "fulfilled" && r.executedFee == null),
+      classifyCachedRow(
+        {
+          status: r.status,
+          validTo: r.validTo,
+          terminalSince: r.terminalSince ?? null,
+          fetchedAt: r.fetchedAt ?? null,
+          cacheVersion: r.cacheVersion ?? null,
+        },
+        nowSeconds,
+        window,
+      ) !== "trusted",
     )
     .map((r) => r.orderUid);
-  if (openUids.length === 0) return rows;
+  if (staleUids.length === 0) return rows;
 
-  const refreshed = await fetchOrdersByUids(context, openUids);
+  const refreshed = await fetchOrdersByUids(context, staleUids);
   if (refreshed.length === 0) return rows;
   const byUid = new Map(refreshed.map((o) => [o.uid, o]));
 
-  const newlyTerminal: ComposableCacheRow[] = [];
+  const touched: ComposableCacheRow[] = [];
   for (const row of rows) {
     const fresh = byUid.get(row.orderUid);
     if (!fresh) continue;
@@ -131,11 +144,11 @@ export async function reconcileOpenCachedRows(
     row.executedSellAmount = fresh.executedSellAmount;
     row.executedBuyAmount = fresh.executedBuyAmount;
     row.executedFee = fresh.executedFee;
-    if (TERMINAL_STATUSES.has(fresh.status)) newlyTerminal.push(row);
+    touched.push(row);
   }
 
-  if (newlyTerminal.length > 0) {
-    await upsertComposableCache(context, owner, newlyTerminal);
+  if (touched.length > 0) {
+    await upsertComposableCache(context, owner, touched);
   }
   return rows;
 }
