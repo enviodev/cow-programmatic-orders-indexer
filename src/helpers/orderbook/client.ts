@@ -234,9 +234,13 @@ export async function upsertDiscreteOrders(
     if (existing) {
       const status = toDiscreteStatus(order.status);
       const validTo = order.validTo != null ? BigInt(order.validTo) : undefined;
-      const executedSellAmount = order.executedSellAmount ?? undefined;
-      const executedBuyAmount = order.executedBuyAmount ?? undefined;
-      const executedFee = order.executedFee ?? undefined;
+      // Durable-cache rows from before the executedFee column carry nulls —
+      // coalesce with the existing value so they never erase amounts already
+      // written by a fresh fetch. The no-op diff below compares the
+      // post-coalesce effective values.
+      const executedSellAmount = order.executedSellAmount ?? existing.executedSellAmount;
+      const executedBuyAmount = order.executedBuyAmount ?? existing.executedBuyAmount;
+      const executedFee = order.executedFee ?? existing.executedFee;
       // Compare only the fields this upsert can change.
       if (
         existing.status === status &&
@@ -300,19 +304,30 @@ export async function fetchOrderStatusByUids(
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
   if (!apiBaseUrl) return result;
 
-  // Check cache first
+  // Check cache first. Fulfilled entries with a null executedFee predate the
+  // executedFee cache column and would otherwise stay stale forever (terminal
+  // entries are never re-fetched) — treat them as misses, but keep the cached
+  // data as a fallback in case the UID has aged out of /by_uids. Expired and
+  // cancelled entries executed nothing, so a null fee there is left alone.
   const cached = await getCachedUidStatuses(context, uids);
   const toFetch: string[] = [];
+  const staleFallbacks = new Map<string, OrderStatusInfo>();
 
   for (const uid of uids) {
     const cachedData = cached.get(uid);
     if (cachedData && TERMINAL_STATUSES.has(cachedData.status)) {
-      result.set(uid, {
+      const info: OrderStatusInfo = {
         status: cachedData.status,
         executedSellAmount: cachedData.executedSellAmount,
         executedBuyAmount: cachedData.executedBuyAmount,
         executedFee: cachedData.executedFee,
-      });
+      };
+      if (cachedData.status === "fulfilled" && cachedData.executedFee == null) {
+        staleFallbacks.set(uid, info);
+        toFetch.push(uid);
+      } else {
+        result.set(uid, info);
+      }
     } else {
       toFetch.push(uid);
     }
@@ -332,7 +347,10 @@ export async function fetchOrderStatusByUids(
     } catch (err) {
       if (err instanceof TimeoutError) {
         log("warn", "ob:statusByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_BATCH_TIMEOUT_MS });
-        return result; // cache-only map — caller treats missing UIDs as "not on API yet"
+        // Cache-only map — callers treat missing UIDs as "not on API yet".
+        // Stale-but-known entries still answer from cache.
+        for (const [uid, info] of staleFallbacks) result.set(uid, info);
+        return result;
       }
       throw err;
     }
@@ -367,6 +385,13 @@ export async function fetchOrderStatusByUids(
 
     if (newTerminal.length > 0) {
       await cacheUidStatuses(context, newTerminal);
+    }
+
+    // Stale UIDs the API no longer returns (aged out of /by_uids): answer with
+    // the cached data rather than omitting them, so callers don't mistake a
+    // long-settled order for "not on API yet".
+    for (const [uid, info] of staleFallbacks) {
+      if (!result.has(uid)) result.set(uid, info);
     }
   }
 

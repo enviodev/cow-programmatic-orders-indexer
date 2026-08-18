@@ -42,12 +42,14 @@ async function promoteCandidate(
   const existing = await context.DiscreteOrder.get(id);
   if (existing) {
     if (insertOnly) return;
+    // Statuses served from the cache can carry null executed amounts —
+    // coalesce so they never erase values from an earlier fresh fetch.
     context.DiscreteOrder.set({
       ...existing,
       status: toDiscreteStatus(status),
-      executedSellAmount: executedSellAmount ?? undefined,
-      executedBuyAmount: executedBuyAmount ?? undefined,
-      executedFee: executedFee ?? undefined,
+      executedSellAmount: executedSellAmount ?? existing.executedSellAmount,
+      executedBuyAmount: executedBuyAmount ?? existing.executedBuyAmount,
+      executedFee: executedFee ?? existing.executedFee,
       promotedAt,
       updatedAtBlock: currentBlock,
     });

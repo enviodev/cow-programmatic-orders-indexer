@@ -60,12 +60,14 @@ if (!isTest) {
           const info = statuses.get(order.orderUid);
           if (!info || !VALID_DISCRETE_STATUSES.has(info.status)) continue;
           // promotedAt intentionally preserved across status updates.
+          // Statuses served from the cache can carry null executed amounts —
+          // coalesce so they never erase values from an earlier fresh fetch.
           context.DiscreteOrder.set({
             ...order,
             status: toDiscreteStatus(info.status),
-            executedSellAmount: info.executedSellAmount ?? undefined,
-            executedBuyAmount: info.executedBuyAmount ?? undefined,
-            executedFee: info.executedFee ?? undefined,
+            executedSellAmount: info.executedSellAmount ?? order.executedSellAmount,
+            executedBuyAmount: info.executedBuyAmount ?? order.executedBuyAmount,
+            executedFee: info.executedFee ?? order.executedFee,
             updatedAtBlock: currentBlock,
           });
           updatedGeneratorIds.push(order.conditionalOrderGenerator_id);
