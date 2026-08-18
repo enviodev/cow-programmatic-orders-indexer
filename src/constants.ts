@@ -90,17 +90,31 @@ export const BLOCK_HANDLER_RPC_TIMEOUT_MS = 15_000;
 export const SETTLEMENT_INNER_RPC_TIMEOUT_MS = 5_000;
 
 /**
- * Hard wall-clock cap for the whole per-owner bootstrap fetch in OwnerBackfill
- * (account pagination + by_uids refresh). An owner that exceeds this is left
- * eligible (historyBackfilled stays false) and retried later.
+ * Wall-clock slice for one per-owner drain attempt in OwnerBackfill. The attempt's
+ * cooperative deadline fires at this point; pages already fetched are persisted with
+ * the resume offset (OwnerDrainProgress), so hitting the deadline is not a failure —
+ * the owner just continues from where it stopped on a later firing.
  */
 export const BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Per-block ceiling on how many distinct owners OwnerBackfill drains in a single
- * firing. Override per chain with env var MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>.
+ * firing. Owner fetches run concurrently (see DEFAULT_OWNER_BACKFILL_CONCURRENCY),
+ * so the per-firing wall-clock is roughly ceil(cap / concurrency) ×
+ * BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS — keep cap = concurrency so a firing stays
+ * ~one slice. Override per chain with env var MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>.
  */
-export const DEFAULT_MAX_OWNERS_BACKFILL_PER_BLOCK = 100;
+export const DEFAULT_MAX_OWNERS_BACKFILL_PER_BLOCK = 20;
+
+/**
+ * How many owner history fetches OwnerBackfill runs concurrently within a single
+ * firing. Bounds in-flight orderbook API load while collapsing the per-firing
+ * wall-clock: at concurrency >= cap, a firing takes ~one BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS
+ * worst case instead of cap × that.
+ *
+ * Override per chain with env var MAX_OWNERS_BACKFILL_CONCURRENCY_<chainId>.
+ */
+export const DEFAULT_OWNER_BACKFILL_CONCURRENCY = 20;
 
 /**
  * Maximum number of TWAP parts that precomputeOrderUids will attempt to enumerate.

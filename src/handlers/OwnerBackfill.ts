@@ -14,6 +14,15 @@
  * Eligibility is the historyBackfilled flag, set at generator creation for the
  * cases that never need a drain (deterministic types, and generators created
  * live) — see ComposableCoW.ts.
+ *
+ * Each owner attempt is a bounded, RESUMABLE slice: progress is persisted
+ * page-by-page in OwnerDrainProgress, so hitting the slice deadline just
+ * pauses the drain and a later firing resumes from the stored offset. Owners
+ * are picked least-recently-attempted first (never-attempted first), so a
+ * slow owner can't monopolize the batch and starve the rest.
+ *
+ * Unknown and CowAmmConstantProduct generators are stored but never drained —
+ * see OWNER_BACKFILL_EXCLUDED in utils/order-types.ts.
  */
 
 import { indexer } from "envio";
@@ -21,12 +30,14 @@ import type { Hex } from "viem";
 import {
   BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
   DEFAULT_MAX_OWNERS_BACKFILL_PER_BLOCK,
+  DEFAULT_OWNER_BACKFILL_CONCURRENCY,
 } from "../constants.js";
 import { fetchComposableOrders, upsertDiscreteOrders } from "../helpers/orderbook/client.js";
+import { mapWithConcurrency } from "../helpers/concurrency.js";
 import { TimeoutError, withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
-import { NON_DETERMINISTIC_TYPES } from "../utils/order-types.js";
+import { OWNER_BACKFILL_TYPES } from "../utils/order-types.js";
 
 // Shared drain — registered for both the historical and live block handlers below.
 async function drainOwnerBatch(
@@ -48,20 +59,37 @@ async function drainOwnerBatch(
   );
 
   // Bounded scan: one hash-nibble bucket per firing (~1/16 of the backlog).
+  // Unknown and CowAmmConstantProduct generators are stored but never drained —
+  // see OWNER_BACKFILL_EXCLUDED in utils/order-types.ts.
   const eligible = await context.ConditionalOrderGenerator.getWhere({
     status: { _eq: "Active" },
-    orderType: { _in: [...NON_DETERMINISTIC_TYPES] },
+    orderType: { _in: [...OWNER_BACKFILL_TYPES] },
     historyBackfilled: { _eq: false },
     hash: nextHexBucket(`ownerdrain:${chainId}`),
   });
 
   if (eligible.length === 0) return; // nothing pending in this bucket — cheap no-op
 
-  // Take up to `cap` distinct owners this block; ordering by owner keeps
-  // progress deterministic and lets already-drained owners fall out of the set.
-  const owners = [...new Set(eligible.map((g: { owner: string }) => g.owner))]
-    .sort()
-    .slice(0, cap) as Hex[];
+  // Take up to `cap` distinct owners this block, least-recently-attempted first
+  // (never-attempted first, then by owner for determinism) so a repeatedly slow
+  // owner rotates to the back of the queue instead of occupying every batch.
+  const distinctOwners = [...new Set(eligible.map((g: { owner: string }) => g.owner))] as Hex[];
+  const attemptAt = new Map<string, bigint | undefined>();
+  for (const o of distinctOwners) {
+    const progress = await context.OwnerDrainProgress.get(o.toLowerCase());
+    attemptAt.set(o, progress?.lastAttemptAt);
+  }
+  const owners = distinctOwners
+    .sort((a, b) => {
+      const la = attemptAt.get(a);
+      const lb = attemptAt.get(b);
+      if (la == null && lb == null) return a < b ? -1 : 1;
+      if (la == null) return -1;
+      if (lb == null) return 1;
+      if (la !== lb) return la < lb ? -1 : 1;
+      return a < b ? -1 : 1;
+    })
+    .slice(0, cap);
 
   // Generator ids for the selected owners, to flip historyBackfilled after a clean drain.
   const ownerGeneratorIds = new Map<string, string[]>();
@@ -72,22 +100,35 @@ async function drainOwnerBatch(
     ownerGeneratorIds.set(g.owner, existing);
   }
 
+  const concurrency = resolveCap(
+    `MAX_OWNERS_BACKFILL_CONCURRENCY_${chainId}`,
+    DEFAULT_OWNER_BACKFILL_CONCURRENCY,
+  );
+
   if (!context.isPreload) {
-    log("info", "OwnerBackfill:START", { block: String(currentBlock), chainId, phase, owners: owners.length, cap });
+    log("info", "OwnerBackfill:START", { block: String(currentBlock), chainId, phase, owners: owners.length, cap, concurrency });
   }
 
-  let discovered = 0;
-  let drained = 0;
+  // Stamp lastAttemptAt at attempt start (drives the rotation above).
+  async function stampAttempt(owner: Hex): Promise<void> {
+    const id = owner.toLowerCase();
+    const prev = await context.OwnerDrainProgress.get(id);
+    context.OwnerDrainProgress.set({
+      id,
+      owner: id,
+      nextOffset: prev?.nextOffset ?? 0,
+      complete: prev?.complete ?? false,
+      deltaCursor: prev?.deltaCursor,
+      lastAttemptAt: BigInt(Math.floor(Date.now() / 1000)),
+    });
+  }
 
-  // Drain owners with bounded parallelism. Upstream loops sequentially, but
-  // the drain runs inside the (serial) batch-processing loop, so its wall time
-  // directly starves event processing — metrics showed the account-orders
-  // effect alone at ~54% of backfill wall time. Per-owner drains are
-  // independent (distinct progress rows, distinct cache rows), and the
-  // orderbook 429 backoff remains the API-level throttle.
-  const DRAIN_CONCURRENCY = 5;
-
-  async function drainOne(owner: Hex): Promise<void> {
+  // One drain slice for one owner. A timeout or incomplete slice needs no
+  // special handling — pages are already persisted with the resume state, so
+  // the owner just continues on a later firing. Errors propagate to abort the
+  // batch (the block handler is idempotent, so the block simply retries).
+  async function drainOne(owner: Hex): Promise<{ discovered: number; drained: number }> {
+    await stampAttempt(owner);
     try {
       // The deadline is passed through so a timed-out drain's orphaned
       // continuation bails cooperatively instead of touching handler context
@@ -98,7 +139,7 @@ async function drainOwnerBatch(
         BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS,
         `OwnerBackfill:owner:${owner}`,
       );
-      discovered += await upsertDiscreteOrders(context, orders);
+      const discovered = await upsertDiscreteOrders(context, orders);
 
       // Only flip the flag when the owner's history was drained in full. A partial
       // drain (rate limit / timeout) leaves the owner eligible → retried next block.
@@ -107,22 +148,28 @@ async function drainOwnerBatch(
           const gen = await context.ConditionalOrderGenerator.get(genId);
           if (gen) context.ConditionalOrderGenerator.set({ ...gen, historyBackfilled: true });
         }
-        drained++;
-      } else if (!context.isPreload) {
-        log("warn", "OwnerBackfill:owner_incomplete", { block: String(currentBlock), chainId, owner });
+        return { discovered, drained: 1 };
       }
+      if (!context.isPreload) {
+        log("info", "OwnerBackfill:owner_paused", { block: String(currentBlock), chainId, owner });
+      }
+      return { discovered, drained: 0 };
     } catch (err) {
       if (err instanceof TimeoutError) {
         log("warn", "OwnerBackfill:owner_timeout", { block: String(currentBlock), chainId, owner, timeoutMs: BOOTSTRAP_OWNER_FETCH_TIMEOUT_MS });
-        return; // leave eligible — retried next block
+        return { discovered: 0, drained: 0 }; // leave eligible — retried next block
       }
       throw err;
     }
   }
 
-  for (let i = 0; i < owners.length; i += DRAIN_CONCURRENCY) {
-    await Promise.all(owners.slice(i, i + DRAIN_CONCURRENCY).map(drainOne));
-  }
+  // Owner fetches are independent HTTP round-trips, so run them through a
+  // bounded worker pool rather than one-at-a-time: wall-clock per firing drops
+  // from cap × timeout to ~ceil(cap / concurrency) × timeout, and concurrency
+  // caps in-flight orderbook load (the 429 backoff remains the API throttle).
+  const tallies = await mapWithConcurrency(owners, concurrency, drainOne);
+  const discovered = tallies.reduce((sum, t) => sum + t.discovered, 0);
+  const drained = tallies.reduce((sum, t) => sum + t.drained, 0);
 
   if (!context.isPreload) {
     log("info", "OwnerBackfill:DONE", { block: String(currentBlock), chainId, phase, owners: owners.length, drained, discovered });

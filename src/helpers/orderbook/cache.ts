@@ -150,24 +150,8 @@ export async function cacheUidStatuses(
 }
 
 // ─── Durable composable-order cache helpers ───────────────────────────────────
-
-/** Newest creationDate already cached for this owner (Unix seconds), or undefined
- *  when nothing is cached — the signal to do a full-history drain. */
-export async function readOwnerBackfillCursor(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  context: any,
-  owner: Hex,
-): Promise<number | undefined> {
-  const rows = await context.ComposableOrderCache.getWhere({
-    owner: { _eq: owner.toLowerCase() },
-  });
-  if (rows.length === 0) return undefined;
-  let max = 0n;
-  for (const row of rows) {
-    if (row.creationDate > max) max = row.creationDate;
-  }
-  return Number(max);
-}
+// The delta cursor lives on OwnerDrainProgress (explicit, upstream owner_drain
+// semantics) — it is never derived from MAX(creationDate) over these rows.
 
 /** All durably-cached composable rows for an owner. */
 export async function readOwnerComposableCache(

@@ -25,7 +25,6 @@ import {
   cacheUidStatuses,
   getCachedFlashLoanEnrichment,
   getCachedUidStatuses,
-  readOwnerBackfillCursor,
   readOwnerComposableCache,
   toCacheRow,
   upsertComposableCache,
@@ -57,7 +56,7 @@ const DRAIN_PAGES_PER_FIRING = 3;
  * Fetch composable orders for an owner, using the per-UID cache for terminal
  * orders and the durable ComposableOrderCache for the incremental drain.
  *
- * Two phases, tracked in OwnerDrainProgress:
+ * Two phases, tracked in OwnerDrainProgress (upstream cow_cache.owner_drain):
  *
  * A. Full-history drain (progress.complete=false): fetch a bounded window of
  *    DRAIN_PAGES_PER_FIRING pages from progress.nextOffset, persist the delta,
@@ -68,11 +67,18 @@ const DRAIN_PAGES_PER_FIRING = 3;
  *    resolves, so progress must be made durable within each firing. (Offset
  *    drift from new orders arriving mid-drain only pushes rows to higher
  *    offsets — re-fetch, never skip; upserts make re-fetch harmless.)
+ *    The newest composable row seen at offset 0 becomes the deltaCursor
+ *    candidate (at-or-older than the true newest raw order — overlap, never a
+ *    gap; orders created mid-drain are newer and a later delta pass gets them).
  *
  * B. Delta drain (progress.complete=true — upstream's steady state):
- * 1. cursor = newest creationDate already cached for this owner
+ * 1. cursor = progress.deltaCursor — explicit, never derived from cached rows
+ *    (MAX(creationDate) conflates "cached this" with "cached everything older",
+ *    so a partial delta would advance the cursor past unfetched orders)
  * 2. Fetch /account/{owner}/orders newest-first, stopping once older than the cursor
  * 3. Decode → filter to composable → match to generators, then persist the delta
+ * 4. Advance deltaCursor ONLY on a complete pass — an incomplete delta
+ *    re-fetches the same window later (overlap, never a gap)
  *
  * Then (both phases, once complete): rebuild the full owner set from the
  * durable cache, re-check still-open cached rows via by_uids, and re-map
@@ -118,6 +124,13 @@ export async function fetchComposableOrders(
     await upsertComposableCache(context, owner, delta.map(toCacheRow));
     deltaCount = delta.length;
 
+    // The newest row of the offset-0 window is the deltaCursor candidate —
+    // written alongside the offset so it can never be skipped.
+    const candidateCursor =
+      startOffset === 0 && page.rows[0]
+        ? BigInt(page.rows[0].creationDate)
+        : undefined;
+
     // Persist resume state — this is what makes retries converge. Only advance
     // when the window actually progressed (an errored first page keeps state).
     if (page.nextOffset > startOffset || page.complete) {
@@ -126,6 +139,8 @@ export async function fetchComposableOrders(
         owner: owner.toLowerCase(),
         nextOffset: page.nextOffset,
         complete: page.complete,
+        deltaCursor: candidateCursor ?? progress?.deltaCursor,
+        lastAttemptAt: progress?.lastAttemptAt,
       });
     }
 
@@ -138,8 +153,13 @@ export async function fetchComposableOrders(
     // newer than the cached history before the owner is marked backfilled.
   }
 
-  // Phase B — incremental delta drain from the creation-date cursor (uncached).
-  const cursor = await readOwnerBackfillCursor(context, owner);
+  // Phase B — incremental delta drain from the explicit deltaCursor (uncached).
+  // Re-read progress: phase A may have just written the cursor candidate.
+  const progressForDelta = await context.OwnerDrainProgress.get(progressId);
+  const cursor =
+    progressForDelta?.deltaCursor != null
+      ? Number(progressForDelta.deltaCursor)
+      : undefined;
   log("info", "ob:fetch", { owner, chainId, since: cursor ?? null });
 
   const delta_ = await fetchAccountOrders(
@@ -150,6 +170,8 @@ export async function fetchComposableOrders(
   if (expired()) return { orders: [], complete: false };
   await upsertComposableCache(context, owner, delta.map(toCacheRow));
   deltaCount += delta.length;
+  // Cursor NOT advanced on an incomplete pass — the same window is re-fetched
+  // on a later firing (overlap, never a gap; upserts are idempotent).
   if (!delta_.complete) return { orders: [], complete: false };
 
   // Rebuild the full owner set from the durable cache (delta + everything older).
@@ -164,7 +186,22 @@ export async function fetchComposableOrders(
   // Re-map by the stable hash to the current generator id.
   const results = await remapToCurrentGenerators(context, reconciled);
 
-  log("info", "ob:fetchResult", { owner, chainId, delta: deltaCount, total: results.length, complete: true });
+  // Complete pass — the newest raw order in the delta (pages are newest-first)
+  // becomes the next cursor.
+  const newest = delta_.orders[0];
+  if (newest) {
+    const fresh = await context.OwnerDrainProgress.get(progressId);
+    context.OwnerDrainProgress.set({
+      id: progressId,
+      owner: owner.toLowerCase(),
+      nextOffset: fresh?.nextOffset ?? 0,
+      complete: fresh?.complete ?? true,
+      deltaCursor: BigInt(Math.floor(new Date(newest.creationDate).getTime() / 1000)),
+      lastAttemptAt: fresh?.lastAttemptAt,
+    });
+  }
+
+  log("info", "ob:fetchResult", { owner, chainId, since: cursor ?? null, delta: deltaCount, total: results.length, complete: true });
   return { orders: results, complete: true };
 }
 

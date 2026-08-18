@@ -195,22 +195,29 @@ type OrderUidCache {
   buyAmount: String
 }
 
-# Per-owner OwnerBackfill drain progress. Upstream relies on the timed-out
-# drain's orphaned promise finishing its cow_cache writes in the background;
-# envio rejects entity writes after a handler resolves, so instead the drain is
-# resumable: each firing fetches a bounded page window from nextOffset and
-# persists it, and `complete` flips once the last page is reached.
+# Per-owner OwnerBackfill drain state (upstream cow_cache.owner_drain). Progress
+# is recorded here explicitly, never derived from cached rows (deriving a cursor
+# from MAX(creationDate) conflates "I cached this" with "I cached everything
+# older than this" — a partial drain would look complete and leave a permanent
+# hole in the owner's history).
+#   nextOffset    — where the resumable full drain continues /account pagination
+#   complete      — a full pass reached the last page at least once
+#   deltaCursor   — newest creationDate (Unix seconds) covered by a complete pass;
+#                   only read once complete, only advanced by a complete delta pass
+#   lastAttemptAt — stamped at attempt start; drives least-recently-attempted rotation
 type OwnerDrainProgress {
   id: ID! # owner (chainId auto-scoped)
   owner: String!
   nextOffset: Int!
   complete: Boolean!
+  deltaCursor: BigInt
+  lastAttemptAt: BigInt
 }
 
 # Durable per-owner composable-order rows: every field needed to rebuild a
 # DiscreteOrder without re-hitting the orderbook, so OwnerBackfill drains only
-# the delta newer than MAX(creationDate) per owner. Keyed by generator hash
-# (stable across redeploys), not the per-deployment generator id.
+# the delta newer than OwnerDrainProgress.deltaCursor per owner. Keyed by
+# generator hash (stable across redeploys), not the per-deployment generator id.
 type ComposableOrderCache {
   id: ID! # orderUid (chainId auto-scoped)
   orderUid: String!

@@ -22,7 +22,7 @@
 
 import { indexer } from "envio";
 import { encodeAbiParameters, keccak256, type Hex } from "viem";
-import { getOrderTypeFromHandler, isNonDeterministic, type OrderType } from "../utils/order-types.js";
+import { getOrderTypeFromHandler, isNonDeterministic, isOwnerBackfillEligible, type OrderType } from "../utils/order-types.js";
 import { decodeStaticInput } from "../decoders/index.js";
 import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
 import { circlesImmutables } from "../effects/rpc.js";
@@ -160,7 +160,9 @@ async function insertGenerator(
       // Only non-deterministic generators created during historical backfill need an
       // OwnerBackfill drain. Deterministic types are fully handled by precompute at
       // creation (live) or by PrecomputeBackfiller at the tip (historical).
-      historyBackfilled: isLive || !isNonDeterministic(orderType),
+      // Unknown and CowAmmConstantProduct are excluded from the backfill entirely
+      // (OWNER_BACKFILL_EXCLUDED), so they're also born "already backfilled".
+      historyBackfilled: isLive || !isOwnerBackfillEligible(orderType),
       // Historical deterministic generators defer their UID precompute to the
       // tip (PrecomputeBackfiller) so the event backfill never blocks on
       // orderbook I/O. Live ones precompute inline, exactly like upstream.
