@@ -48,7 +48,6 @@ if (!isTest) {
         .sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
         .slice(0, cap);
 
-      const ts = await blockTimestamp(context, block);
       let done = 0;
 
       // Wall-clock budget per firing: under orderbook 429 penalties a single
@@ -61,13 +60,21 @@ if (!isTest) {
 
       for (const gen of batch) {
         if (Date.now() - start > FIRING_BUDGET_MS) break;
+        // Upstream precomputes inline at creation, so its rows carry the
+        // creation block's timestamp as creationDate. The deferred drain must
+        // do the same — the generator id embeds its creation block, and the
+        // cached getBlockTimestamp effect resolves the header. (TWAP t0 was
+        // already resolved at creation and stored in decodedParams, so only
+        // creationDate depends on this timestamp.)
+        const creationBlock = Number(gen.id.split("_")[0]);
+        const creationTs = await blockTimestamp(context, { number: creationBlock });
         await precomputeAndDiscover(
           context,
           gen.id,
           gen.owner as Hex,
           gen.orderType as OrderType,
           (gen.decodedParams ?? null) as Record<string, string> | null,
-          ts,
+          creationTs,
           BigInt(block.number),
         );
         // Re-read: precomputeAndDiscover may have updated status/allCandidatesKnown.
