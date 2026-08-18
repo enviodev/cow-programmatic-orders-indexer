@@ -1,7 +1,9 @@
 # CoW Programmatic Orders Indexer (Envio)
 
-Envio HyperIndex port of the [CoW programmatic orders ponder indexer](../cow-programmatic-orders-api),
-kept 1:1 with upstream's indexing behaviour. Indexes Composable CoW conditional-order
+Envio HyperIndex port of the [CoW programmatic orders ponder indexer](../cow-programmatic-orders-api)
+(now maintained as [cowprotocol/cow-programmatic-orders-api](https://github.com/cowprotocol/cow-programmatic-orders-api)),
+kept 1:1 with upstream's indexing behaviour. Mapped through upstream commit
+`47b2601` (behavioral content through `ff0fd96`; later commits are CI/deploy/API-only). Indexes Composable CoW conditional-order
 generators, the discrete-order lifecycle (UID precompute → candidate → orderbook-confirmed),
 COWShed proxy ownership, and Aave V3 flash-loan orders on **mainnet + gnosis**.
 
@@ -60,6 +62,16 @@ elevated limits CoW suggests contacting bd@cow.fi.
   `ComposableOrderCache` entities (rebuilt on a full re-sync).
 - `FlashLoanOrder.enriched` boolean mirrors `enrichedAt IS NULL` for queryability.
 - Block handlers derive "startBlock: latest" semantics from `chain.isRealtime`.
+- Upstream's `cow_cache.owner_drain` is the `OwnerDrainProgress` entity; the owner drain
+  runs as bounded, resumable page windows (an envio handler cannot leave orphaned writes
+  running past its own resolution, so progress is checkpointed per firing instead of
+  relying on an AbortController-terminated fetch).
+- `disable_default_cross_chain: true` (envio ≥3.6): rows are keyed `(id, chainId)`, so
+  entity ids are the bare upstream keys (orderUid, owner, txHash) without a chain prefix,
+  and effects are chain-scoped via `context.chain.id`.
+- OrderStatusTracker's soft-terminal re-poll skips rows with a null `validTo`
+  (`getWhere` has no IS NULL); such rows are rare — every write path stores `validTo`
+  when the API provides one.
 
 ## Pre-requisites
 
