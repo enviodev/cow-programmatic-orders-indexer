@@ -67,16 +67,19 @@ for (const chainId of [1, 100]) {
       hash owner resolvedOwner handler salt staticInput orderType status decodedParams decodeError txHash historyBackfilled chainId
     }
   }`, { hashes: theirGens.map((g) => g.hash), c: chainId });
-  const oursByHash = new Map(o.ConditionalOrderGenerator.map((g) => [g.hash, g]));
+  // The same params hash can be created on-chain multiple times (one generator
+  // row per creation event on both sides) — join on (hash, txHash).
+  const genKey = (g) => g.hash + "|" + norm(g.txHash);
+  const oursByKey = new Map(o.ConditionalOrderGenerator.map((g) => [genKey(g), g]));
 
-  const missing = theirGens.filter((g) => !oursByHash.has(g.hash));
+  const missing = theirGens.filter((g) => !oursByKey.has(genKey(g)));
   console.log(`\n═══ chain ${chainId} generators: theirs sample ${theirGens.length}, found in ours ${theirGens.length - missing.length}, MISSING in ours ${missing.length}`);
   for (const m of missing.slice(0, 5)) console.log(`  missing hash=${m.hash} owner=${m.owner} type=${m.orderType} tx=${m.txHash}`);
   failures += missing.length;
 
   failures += diffRows(
     `chain ${chainId} generator identity`,
-    theirGens.filter((g) => oursByHash.has(g.hash)).map((g) => [g, oursByHash.get(g.hash)]),
+    theirGens.filter((g) => oursByKey.has(genKey(g))).map((g) => [g, oursByKey.get(genKey(g))]),
     [
       ["owner", (x) => norm(x.owner), (x) => norm(x.owner)],
       ["handler", (x) => norm(x.handler), (x) => norm(x.handler)],
