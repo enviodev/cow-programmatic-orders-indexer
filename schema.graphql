@@ -92,6 +92,10 @@ type ConditionalOrderGenerator {
   # change (insert, status change, or any change to a child discrete order).
   # NOT bumped for polling metadata or standalone allCandidatesKnown flips.
   updatedAtBlock: BigInt! @index
+  # Per-order-type extras; null unless the type defines any. Only TWAP today:
+  # executed sell/buy/fee totals aggregated across its discrete orders (decimal
+  # strings in raw token units; executedFee is in the sell token).
+  additionalData: Json
   discreteOrders: [DiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
   candidateDiscreteOrders: [CandidateDiscreteOrder!]! @derivedFrom(field: "conditionalOrderGenerator")
 }
