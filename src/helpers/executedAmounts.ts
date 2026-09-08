@@ -12,7 +12,7 @@ export interface TwapAdditionalData {
   executedFee: string;
 }
 
-const ZERO_TOTALS: TwapAdditionalData = {
+export const ZERO_TOTALS: TwapAdditionalData = {
   executedSellAmount: "0",
   executedBuyAmount: "0",
   executedFee: "0",

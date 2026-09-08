@@ -25,6 +25,7 @@ import { encodeAbiParameters, keccak256, type Hex } from "viem";
 import { getOrderTypeFromHandler, isNonDeterministic, isOwnerBackfillEligible, type OrderType } from "../utils/order-types.js";
 import { decodeStaticInput } from "../decoders/index.js";
 import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
+import { ZERO_TOTALS } from "../helpers/executedAmounts.js";
 import { circlesImmutables } from "../effects/rpc.js";
 import { log } from "../helpers/logger.js";
 
@@ -150,6 +151,7 @@ async function insertGenerator(
       status: "Active",
       decodedParams: decodedParams ?? undefined,
       decodeError: decodeError ?? undefined,
+      additionalData: orderType === "TWAP" ? ZERO_TOTALS : undefined,
       txHash: event.transaction.hash,
       allCandidatesKnown: false,
       nextCheckBlock: BigInt(event.block.number),
