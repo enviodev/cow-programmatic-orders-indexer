@@ -23,7 +23,8 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "OrderStatusTracker",
-      where: ({ chain }) => pollerBlockFilter(chain.id),
+      // Every block (upstream 42dc840) — faster part updates.
+      where: ({ chain }) => pollerBlockFilter(chain.id, 1),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

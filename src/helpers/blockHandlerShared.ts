@@ -89,12 +89,14 @@ export function pollerActivationFloor(chainId: number): number {
 
 /** onBlock `where` filter for realtime pollers: per-chain stride, plus the
  *  activation floor when one is configured. `_gte` must be omitted when there
- *  is no floor — envio rejects a _gte below the chain start block. */
-export function pollerBlockFilter(chainId: number): {
+ *  is no floor — envio rejects a _gte below the chain start block.
+ *  `everyOverride` pins the stride (upstream 42dc840: candidate and status
+ *  checks run every block for faster part updates). */
+export function pollerBlockFilter(chainId: number, everyOverride?: number): {
   block: { number: { _gte?: number; _every: number } };
 } {
   const floor = pollerActivationFloor(chainId);
-  const every = blockHandlerInterval(chainId);
+  const every = everyOverride ?? blockHandlerInterval(chainId);
   return floor > 0
     ? { block: { number: { _gte: floor, _every: every } } }
     : { block: { number: { _every: every } } };
