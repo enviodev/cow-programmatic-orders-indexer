@@ -10,9 +10,15 @@ export const mainnet: ChainConfig = {
     address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74",
     startBlock: 17883049,
   },
+  // Official deployments:
+  // https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
   cowShedFactory: {
-    address: "0x312f92fe5f1710408b20d52a374fa29e099cfa86",
-    startBlock: 22939254,
+    address: [
+      "0x5e284e80f3bd6a7d80a8500d9c49878028110848", // v2.1.0 factory for COWShedForComposableCoW
+      "0xc94f7d71d022e773b0b516841ff867c06f39726b", // v2.1.0 factory for COWShed
+      "0x312f92fe5f1710408b20d52a374fa29e099cfa86", // legacy (COWShed)
+    ] as const,
+    startBlock: 22939254, // earliest COWShedBuilt from any configured factory on Mainnet
   },
   gpv2Settlement: {
     address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",

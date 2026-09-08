@@ -33,7 +33,7 @@ export interface ChainConfig {
 
   /**
    * CoWShedFactory deployment(s) on this chain.
-   * Gnosis has two factory addresses (current + legacy), so address may be an array.
+   * Address may be an array when a chain has multiple factory deployments.
    * Null when the factory address hasn't been confirmed for this chain yet.
    */
   cowShedFactory: {

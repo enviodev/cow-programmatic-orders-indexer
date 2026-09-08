@@ -10,12 +10,16 @@ export const gnosis: ChainConfig = {
     address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74",
     startBlock: 29389123,
   },
+  // Official deployments:
+  // https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
   cowShedFactory: {
     address: [
-      "0x4f4350bf2c74aacd508d598a1ba94ef84378793d", // current (CoWShedForComposableCoW)
+      "0x5e284e80f3bd6a7d80a8500d9c49878028110848", // v2.1.0 factory for COWShedForComposableCoW
+      "0xc94f7d71d022e773b0b516841ff867c06f39726b", // v2.1.0 factory for COWShed
+      "0x4f4350bf2c74aacd508d598a1ba94ef84378793d", // v2.0.0 (CoWShedForComposableCoW)
       "0x312f92fe5f1710408b20d52a374fa29e099cfa86", // legacy (COWShed); 2 historical events
     ] as const,
-    startBlock: 41469991, // earliest COWShedBuilt from either factory on Gnosis
+    startBlock: 41469991, // earliest COWShedBuilt from any configured factory on Gnosis
   },
   gpv2Settlement: {
     address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",
