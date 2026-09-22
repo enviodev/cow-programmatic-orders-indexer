@@ -16,7 +16,7 @@ import { withTimeout } from "../helpers/withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
 import { refreshTwapExecutionState } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, targetInterval } from "../helpers/blockHandlerShared.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CandidateRow = any;
@@ -78,8 +78,8 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "CandidateConfirmer",
-      // Every block (upstream 42dc840) — faster part updates.
-      where: ({ chain }) => pollerBlockFilter(chain.id, 1),
+      // Target ~5s status checks (upstream fa57952).
+      where: ({ chain }) => pollerBlockFilter(chain.id, targetInterval(chain.id, 5)),
     },
     async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream

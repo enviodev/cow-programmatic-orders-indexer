@@ -19,6 +19,14 @@ export function blockHandlerInterval(chainId: number): number {
   return chain.blockTime < 8 ? 10 : 4;
 }
 
+/** Stride that fires roughly every `targetSeconds` on this chain (upstream
+ *  fa57952: status checks target ~5s, discovery ~60s). */
+export function targetInterval(chainId: number, targetSeconds: number): number {
+  const chain = ACTIVE_CHAINS.find((c) => c.chainId === chainId);
+  const blockTime = chain?.blockTime ?? 12;
+  return Math.max(1, Math.ceil(targetSeconds / blockTime));
+}
+
 /** Resolve an integer cap from an env var with a default. */
 export function resolveCap(envVar: string, fallback: number): number {
   const raw = Number(process.env[envVar]);

@@ -22,7 +22,7 @@ import {
 import { pollTradeableOrders, type PollOrderResult } from "../effects/rpc.js";
 import { computeOrderUid, KIND_SELL, type GPv2OrderData } from "../helpers/orderUid.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap, targetInterval } from "../helpers/blockHandlerShared.js";
 import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
 
@@ -63,7 +63,10 @@ if (!isTest) {
   indexer.onBlock(
     {
       name: "OrderDiscoveryPoller",
-      where: ({ chain }) => pollerBlockFilter(chain.id),
+      // Target ~60s to reduce RPC/DB load (upstream fa57952). TWAP parts are
+      // normally precomputed; only generators whose precompute failed or was
+      // skipped use this discovery path.
+      where: ({ chain }) => pollerBlockFilter(chain.id, targetInterval(chain.id, 60)),
     },
     async ({ block, context }) => {
       // startBlock "latest" upstream — only poll once caught up to the tip.
