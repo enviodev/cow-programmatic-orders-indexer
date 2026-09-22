@@ -449,7 +449,10 @@ describe("Order Type Resolution", () => {
 
   it("should return Unknown for unrecognized handlers and chains", () => {
     expect(getOrderTypeFromHandler("0x0000000000000000000000000000000000000042", 1)).toBe("Unknown");
-    expect(getOrderTypeFromHandler("0x6cf1e9ca41f7611def408122793c358a3d11e5a5", 42161)).toBe("Unknown");
+    // Chain-agnostic handlers resolve on every DEFINED chain (upstream e3f3d63)...
+    expect(getOrderTypeFromHandler("0x6cf1e9ca41f7611def408122793c358a3d11e5a5", 42161)).toBe("TWAP");
+    // ...but an undefined chain still yields Unknown.
+    expect(getOrderTypeFromHandler("0x6cf1e9ca41f7611def408122793c358a3d11e5a5", 999999)).toBe("Unknown");
   });
 
   it("should be case-insensitive", () => {

@@ -69,10 +69,14 @@ const GNOSIS_ONLY_HANDLERS: Record<string, OrderType> = {
   "0xb148f40fff05b5ce6b22752cf8e454b556f7a851": "CowAmmConstantProduct",
 };
 
+import { ALL_DEFINED_CHAINS } from "../chains/index.js";
+
 const HANDLER_MAP: Record<number, Record<string, OrderType>> = {
+  ...Object.fromEntries(
+    ALL_DEFINED_CHAINS.map(({ chainId }) => [chainId, HANDLER_ADDRESS_TO_TYPE]),
+  ),
   1:     { ...HANDLER_ADDRESS_TO_TYPE, ...MAINNET_ONLY_HANDLERS }, // Mainnet
   100:   { ...HANDLER_ADDRESS_TO_TYPE, ...GNOSIS_ONLY_HANDLERS },  // Gnosis Chain
-  42161: {}, // Arbitrum One
 };
 
 /**

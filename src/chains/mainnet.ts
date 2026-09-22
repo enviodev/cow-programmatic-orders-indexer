@@ -1,6 +1,6 @@
 import { type ChainConfig } from "./types.js";
 
-const blockTime = 12;
+const blockTime = 12; // Seconds/block; 10,000-block average, 2026-09-16
 
 export const mainnet: ChainConfig = {
   name: "mainnet",
@@ -14,6 +14,7 @@ export const mainnet: ChainConfig = {
   // https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
   cowShedFactory: {
     address: [
+      "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca", // COWShedForComposableCoW factory with executeOwnHooks
       "0x5e284e80f3bd6a7d80a8500d9c49878028110848", // v2.1.0 factory for COWShedForComposableCoW
       "0xc94f7d71d022e773b0b516841ff867c06f39726b", // v2.1.0 factory for COWShed
       "0x312f92fe5f1710408b20d52a374fa29e099cfa86", // legacy (COWShed)

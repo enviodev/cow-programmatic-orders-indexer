@@ -3,7 +3,7 @@ name: cow-programmatic-orders
 disable_default_cross_chain: true # recommended; default in HyperIndex v4
 description: CoW Protocol Programmatic Orders Indexer — Composable CoW generators, discrete-order lifecycle, COWShed ownership, and Aave flash-loan orders
 # Addresses and start blocks mirror src/chains/*.ts (which mirror the upstream
-# ponder indexer's chain registry). Active chains: mainnet + gnosis.
+# ponder indexer's chain registry). All 11 defined chains are active (upstream e3f3d63).
 
 contracts:
   - name: ComposableCoW
@@ -34,13 +34,14 @@ chains:
       - name: COWShedFactory
         # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
         address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
           - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # v2.1.0 factory for COWShedForComposableCoW
           - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # v2.1.0 factory for COWShed
           - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy (COWShed)
-        start_block: 22939254 # earliest COWShedBuilt from any configured factory
+        start_block: 22939254
       - name: GPv2Settlement
         address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
-        start_block: 23812751 # AaveV3AdapterFactory deployment block
+        start_block: 23812751 # AaveV3AdapterFactory deployment block (Nov 16, 2025)
 
   - id: 100 # Gnosis Chain
     start_block: 29389123
@@ -51,14 +52,170 @@ chains:
       - name: COWShedFactory
         # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
         address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
           - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # v2.1.0 factory for COWShedForComposableCoW
           - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # v2.1.0 factory for COWShed
           - "0x4f4350bf2c74aacd508d598a1ba94ef84378793d" # v2.0.0 (CoWShedForComposableCoW)
           - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy (COWShed); 2 historical events
-        start_block: 41469991 # earliest COWShedBuilt from any configured factory on Gnosis
+        start_block: 41469991
       - name: GPv2Settlement
         address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
         start_block: 43177077 # AaveV3AdapterFactory deployment block on Gnosis
+
+  - id: 42161 # Arbitrum One
+    start_block: 204751436
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 204751436
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 358667546
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 400913741 # AaveV3AdapterFactory deployment block on Arbitrum
+
+  - id: 43114 # Avalanche C-Chain
+    start_block: 60434336
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 60434336
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 65617025
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 72063515 # AaveV3AdapterFactory deployment block on Avalanche
+
+  - id: 8453 # Base
+    start_block: 21794150
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 21794150
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 32986811
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 38260337 # AaveV3AdapterFactory deployment block on Base
+
+  - id: 56 # BNB Chain
+    start_block: 48433175
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 48433175
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 61362362
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 68412820 # AaveV3AdapterFactory deployment block on BNB
+
+  - id: 57073 # Ink
+    start_block: 34878187
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 34878187
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+        start_block: 51750825
+
+  - id: 59144 # Linea
+    start_block: 25028474
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 25028474
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 25033271
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 26288706 # AaveV3AdapterFactory deployment block on Linea
+
+  - id: 9745 # Plasma
+    start_block: 4803028
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 4810535
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 4803028
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 7830693 # AaveV3AdapterFactory deployment block on Plasma
+
+  - id: 137 # Polygon
+    start_block: 70406888
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 70406888
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy
+        start_block: 74072686
+      - name: GPv2Settlement
+        address: "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+        start_block: 79103055 # AaveV3AdapterFactory deployment block on Polygon
+
+  - id: 11155111 # Sepolia
+    start_block: 5072748
+    contracts:
+      - name: ComposableCoW
+        address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+        start_block: 5072748
+      - name: COWShedFactory
+        # Official deployments: https://github.com/cowdao-grants/cow-shed/blob/main/networks.json
+        address:
+          - "0x221c28ec177cf7da6f837dfd0052ba8f265fb4ca" # COWShedForComposableCoW factory with executeOwnHooks
+          - "0x5e284e80f3bd6a7d80a8500d9c49878028110848" # v2.1.0 factory for COWShedForComposableCoW
+          - "0xc94f7d71d022e773b0b516841ff867c06f39726b" # v2.1.0 factory for COWShed
+          - "0x312f92fe5f1710408b20d52a374fa29e099cfa86" # legacy (COWShed)
+        start_block: 8784028
 
 # number/timestamp/hash block fields are always selected by default.
 field_selection:

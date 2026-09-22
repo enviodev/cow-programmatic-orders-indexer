@@ -7,8 +7,10 @@
  */
 
 import { createEffect, S } from "envio";
-import { createPublicClient, http, keccak256, toBytes, type Chain, type Hex, type PublicClient } from "viem";
-import { mainnet, gnosis } from "viem/chains";
+import { createPublicClient, defineChain, http, keccak256, toBytes, type Chain, type Hex, type PublicClient } from "viem";
+import {
+  arbitrum, avalanche, base, bsc, gnosis, ink, linea, mainnet, polygon, sepolia,
+} from "viem/chains";
 import {
   AAVE_V3_ADAPTER_FACTORY_ADDRESSES,
   COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID,
@@ -32,9 +34,28 @@ import { hypersyncBlockLogs, hypersyncBlockTimestamp } from "../helpers/hypersyn
 
 // ─── Per-chain viem clients (lazy-initialized) ─────────────────────────────
 
+// Plasma has no viem export at our pinned version — minimal definition; the
+// canonical CREATE2 multicall3 deployment exists there like everywhere else.
+const plasma = defineChain({
+  id: 9745,
+  name: "Plasma",
+  nativeCurrency: { name: "XPL", symbol: "XPL", decimals: 18 },
+  rpcUrls: { default: { http: ["https://rpc.plasma.to"] } },
+  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
+});
+
 const CHAINS: Record<number, Chain> = {
   1: mainnet,
+  56: bsc,
   100: gnosis,
+  137: polygon,
+  8453: base,
+  9745: plasma,
+  42161: arbitrum,
+  43114: avalanche,
+  57073: ink,
+  59144: linea,
+  11155111: sepolia,
 };
 
 const clients = new Map<number, PublicClient>();

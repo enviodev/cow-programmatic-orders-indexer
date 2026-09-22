@@ -3,9 +3,13 @@
 Envio HyperIndex port of the [CoW programmatic orders ponder indexer](../cow-programmatic-orders-api)
 (now maintained as [cowprotocol/cow-programmatic-orders-api](https://github.com/cowprotocol/cow-programmatic-orders-api)),
 kept 1:1 with upstream's indexing behaviour. Mapped through upstream commit
-`47b2601` (behavioral content through `ff0fd96`; later commits are CI/deploy/API-only). Indexes Composable CoW conditional-order
+`caaa9a3` (behavioral content through `3513133`). Indexes Composable CoW conditional-order
 generators, the discrete-order lifecycle (UID precompute → candidate → orderbook-confirmed),
-COWShed proxy ownership, and Aave V3 flash-loan orders on **mainnet + gnosis**.
+COWShed proxy ownership, and Aave V3 flash-loan orders on **all 11 supported chains**
+(mainnet, gnosis, arbitrum, avalanche, base, bnb, ink, linea, plasma, polygon, sepolia —
+upstream e3f3d63). HyperSync streams every chain without per-chain RPC contracts; the
+on-chain poll effects use `ENVIO_RPC_URL_<chainId>` where configured and degrade
+gracefully where not.
 
 ## What it indexes
 
@@ -72,6 +76,11 @@ elevated limits CoW suggests contacting bd@cow.fi.
 - OrderStatusTracker's soft-terminal re-poll skips rows with a null `validTo`
   (`getWhere` has no IS NULL); such rows are rare — every write path stores `validTo`
   when the API provides one.
+- Upstream's SQL views (`part_order` union of discrete+candidate rows, and
+  `programmatic_order` with part counts — fb75af6/9057fff) are API-layer reads; the
+  GraphQL API serves both tables with relationship queries instead.
+- Upstream's isolated per-chain sync (682d0ac — one ponder instance per chain, plus a
+  patched ponder build) is unnecessary here: envio chains already sync independently.
 
 ## Pre-requisites
 
