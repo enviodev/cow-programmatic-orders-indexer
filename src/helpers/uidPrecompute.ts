@@ -16,7 +16,7 @@
 import type { Hex } from "viem";
 import { computeOrderUid, type GPv2OrderData, KIND_SELL, KIND_BUY, BALANCE_ERC20 } from "./orderUid.js";
 import { fetchOrderStatusByUids } from "./orderbook/client.js";
-import { refreshTwapExecutedTotals } from "./executedAmounts.js";
+import { refreshTwapExecutionState } from "./executedAmounts.js";
 import { toDiscreteStatus } from "./orderbook/types.js";
 import { type OrderType, DETERMINISTIC_ORDER_TYPE } from "../utils/order-types.js";
 import { log } from "./logger.js";
@@ -155,7 +155,7 @@ export async function precomputeAndDiscover(
   }
 
   if (wroteDiscrete) {
-    await refreshTwapExecutedTotals(context, [generatorId]);
+    await refreshTwapExecutionState(context, [generatorId], blockNumber);
   }
 
   const allTerminal = precomputed.every((o) => {

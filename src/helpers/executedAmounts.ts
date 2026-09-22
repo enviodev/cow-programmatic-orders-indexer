@@ -33,24 +33,32 @@ function sumField(rows: { [k: string]: unknown }[], field: string): string {
   return total.toString();
 }
 
-/** Rebuild TWAP parents' execution totals (additionalData) after part-order writes.
+/** Rebuild TWAP parents' execution state after part-order writes.
  *  TWAP-only: every part sells the same token, so summing raw amounts is unit-safe
  *  (the orderbook reports executedFee in the sell token for sell orders). Other
  *  order types keep additionalData null — e.g. PerpetualSwap parts alternate
- *  direction, so a single sum would mix token units. */
-export async function refreshTwapExecutedTotals(
+ *  direction, so a single sum would mix token units.
+ *
+ *  Also owns the TWAP lifecycle (upstream ac3353d): a parent whose parts are
+ *  all known and none open flips to Completed; orderbook reorg reconciliation
+ *  can reopen a previously terminal part, which flips it back to Active.
+ *  Returns the generator ids completed by this call. */
+export async function refreshTwapExecutionState(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
   generatorIds: string[],
-): Promise<void> {
+  blockNumber: bigint,
+): Promise<string[]> {
   const ids = [...new Set(generatorIds)];
-  if (ids.length === 0) return;
-
+  const completed: string[] = [];
   for (const id of ids) {
     const generator = await context.ConditionalOrderGenerator.get(id);
     if (!generator || generator.orderType !== "TWAP") continue;
 
     const parts = await context.DiscreteOrder.getWhere({
+      conditionalOrderGenerator_id: { _eq: id },
+    });
+    const candidates = await context.CandidateDiscreteOrder.getWhere({
       conditionalOrderGenerator_id: { _eq: id },
     });
 
@@ -61,7 +69,31 @@ export async function refreshTwapExecutedTotals(
           executedBuyAmount: sumField(parts, "executedBuyAmount"),
           executedFee: sumField(parts, "executedFee"),
         };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const openPartCount = parts.filter((p: any) => p.status === "Open").length;
+    const hasCandidates = candidates.length > 0;
 
-    context.ConditionalOrderGenerator.set({ ...generator, additionalData: totals });
+    const isComplete =
+      generator.status === "Active" &&
+      generator.allCandidatesKnown &&
+      parts.length > 0 &&
+      openPartCount === 0 &&
+      !hasCandidates;
+    // Orderbook reorg reconciliation can reopen a previously terminal part.
+    const isReopened =
+      generator.status === "Completed" && (openPartCount > 0 || hasCandidates);
+
+    context.ConditionalOrderGenerator.set({
+      ...generator,
+      additionalData: totals,
+      ...(isComplete
+        ? { status: "Completed", lastPollResult: "executionState:allTerminal", updatedAtBlock: blockNumber }
+        : {}),
+      ...(isReopened
+        ? { status: "Active", lastPollResult: "executionState:reopened", updatedAtBlock: blockNumber }
+        : {}),
+    });
+    if (isComplete) completed.push(id);
   }
+  return completed;
 }

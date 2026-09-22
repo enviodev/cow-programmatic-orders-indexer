@@ -25,7 +25,7 @@ import {
 } from "../../constants.js";
 import { TimeoutError, withTimeout } from "../withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../updatedAtBlock.js";
-import { refreshTwapExecutedTotals } from "../executedAmounts.js";
+import { refreshTwapExecutionState } from "../executedAmounts.js";
 import { log } from "../logger.js";
 import { fetchAccountHistoryPage, fetchAccountOrders, fetchOrdersByUids } from "./http.js";
 import {
@@ -291,7 +291,7 @@ export async function upsertDiscreteOrders(
     changedGeneratorIds.push(order.generatorId);
   }
   await bumpGeneratorsUpdatedAt(context, changedGeneratorIds, blockNumber);
-  await refreshTwapExecutedTotals(context, changedGeneratorIds);
+  await refreshTwapExecutionState(context, changedGeneratorIds, blockNumber);
   return changedCount;
 }
 

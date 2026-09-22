@@ -14,7 +14,7 @@ import { fetchOrderStatusByUids, fetchOwnerOrderStatuses } from "../helpers/orde
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { withTimeout } from "../helpers/withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
-import { refreshTwapExecutedTotals } from "../helpers/executedAmounts.js";
+import { refreshTwapExecutionState } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter } from "../helpers/blockHandlerShared.js";
 
@@ -140,9 +140,10 @@ if (!isTest) {
           context.CandidateDiscreteOrder.deleteUnsafe(c.id);
         }
 
-        await refreshTwapExecutedTotals(
+        await refreshTwapExecutionState(
           context,
           orphanCandidates.map((c: CandidateRow) => c.conditionalOrderGenerator_id),
+          BigInt(block.number),
         );
 
         if (!context.isPreload) {
@@ -253,10 +254,10 @@ if (!isTest) {
       }
 
       if (confirmed > 0 || stale.length > 0) {
-        await refreshTwapExecutedTotals(context, [
+        await refreshTwapExecutionState(context, [
           ...confirmedGeneratorIds,
           ...stale.map((c: CandidateRow) => c.conditionalOrderGenerator_id),
-        ]);
+        ], BigInt(block.number));
       }
       if ((confirmed > 0 || stale.length > 0) && !context.isPreload) {
         log("info", "CandidateConfirmer:DONE", { block: String(block.number), chainId, candidates: unconfirmed.length, confirmed, expired: stale.length });

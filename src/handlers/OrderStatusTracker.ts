@@ -13,7 +13,7 @@ import { REORG_SAFETY_WINDOW_SECONDS } from "../data.js";
 import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
 import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
-import { refreshTwapExecutedTotals } from "../helpers/executedAmounts.js";
+import { refreshTwapExecutionState } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
@@ -79,7 +79,7 @@ if (!isTest) {
           updated++;
         }
         await bumpGeneratorsUpdatedAt(context, updatedGeneratorIds, currentBlock);
-        await refreshTwapExecutedTotals(context, updatedGeneratorIds);
+        await refreshTwapExecutionState(context, updatedGeneratorIds, currentBlock);
 
         if (updated > 0 && !context.isPreload) {
           log("info", "OrderStatusTracker:DONE", { block: String(block.number), chainId, open: openOrders.length, updated });
@@ -170,7 +170,7 @@ if (!isTest) {
 
           if (touchedGeneratorIds.length > 0) {
             await bumpGeneratorsUpdatedAt(context, touchedGeneratorIds, currentBlock);
-            await refreshTwapExecutedTotals(context, touchedGeneratorIds);
+            await refreshTwapExecutionState(context, touchedGeneratorIds, currentBlock);
             if (!context.isPreload) {
               log("info", "OrderStatusTracker:REORG_HEAL", { block: String(block.number), chainId, reverted, flipped });
             }
@@ -206,6 +206,9 @@ if (!isTest) {
         }
       }
       await bumpGeneratorsUpdatedAt(context, cascadedGeneratorIds, currentBlock);
+      // Cascade-cancelled / expired parts can complete their TWAP parent too
+      // (upstream ac3353d refreshes after the expiry sweep).
+      await refreshTwapExecutionState(context, cascadedGeneratorIds, currentBlock);
     },
   );
 }
