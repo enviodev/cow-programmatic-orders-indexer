@@ -42,35 +42,43 @@ export const isTest = typeof process !== "undefined" && !!process.env.VITEST;
  * `startBlock: "latest"` block handlers.
  *
  * Every onBlock handler here is a realtime poller that no-ops during
- * historical sync, but a bare `_every` stride still fires it for EVERY
- * matching historical block: ~23M no-op invocations per full backfill
- * (hours of pure scheduling overhead — measured as "Loaders 76%" with the
- * event counter dominated by block firings). Registering with
+ * historical sync, but a bare `_every` stride still schedules it for EVERY
+ * matching historical block. Across 11 chains that is ~569M firings per full
+ * sync (Arbitrum alone: 220M, from 305M blocks at 0.3s), which measured as
+ * ~4 days of pure overhead on deployment d4c0453. Registering with
  * `_gte: head - margin` skips them at the source.
  *
  * Resolved once at module load (top-level await) from the HyperSync head,
- * minus a margin so pollers wake just before the realtime transition. Env
- * override: POLLER_ACTIVATION_BLOCK_<chainId>. Falls back to 0 (fire
- * everywhere — previous behaviour) if the height lookup fails.
+ * minus a margin so pollers are registered before the realtime transition.
+ * A restart moves the floor up, which is safe: envio regenerates block items
+ * from the chain's progress block using the current registration, keeping no
+ * per-handler cursor, and these pollers read state from the DB rather than
+ * depending on particular blocks.
+ *
+ * On by default. Env vars (hosted envio-cloud only accepts ENVIO_-prefixed
+ * keys; the unprefixed names still work locally):
+ *   ENVIO_POLLER_FLOOR_FROM_HEAD=0          fire through all history instead
+ *   ENVIO_POLLER_ACTIVATION_BLOCK_<chainId> pin the floor to a fixed block
+ * Falls back to 0 (fire everywhere) if the height lookup fails.
  */
 const ACTIVATION_MARGIN_BLOCKS = 1_000;
 
+function env(name: string): string | undefined {
+  return process.env[`ENVIO_${name}`] ?? process.env[name];
+}
+
 async function resolveActivationFloors(): Promise<Record<number, number>> {
   const floors: Record<number, number> = {};
+  const floorFromHead = env("POLLER_FLOOR_FROM_HEAD") !== "0";
   await Promise.all(
     ACTIVE_CHAINS.map(async (chain) => {
-      const override = Number(process.env[`POLLER_ACTIVATION_BLOCK_${chain.chainId}`]);
+      const raw = env(`POLLER_ACTIVATION_BLOCK_${chain.chainId}`);
+      const override = raw === undefined || raw === "" ? NaN : Number(raw);
       if (Number.isFinite(override) && override >= 0) {
         floors[chain.chainId] = override;
         return;
       }
-      // Opt-in (POLLER_FLOOR_FROM_HEAD=1): anchor pollers just below the
-      // HyperSync head to skip their historical no-op firings entirely.
-      // Default 0 = pollers fire through history (they no-op behind the
-      // isRealtime gate); envio chews these at tens of thousands/sec and the
-      // precompute deferral keeps batches from blocking on the orderbook, so
-      // the default favours the simpler, well-trodden path.
-      if (process.env.POLLER_FLOOR_FROM_HEAD !== "1") {
+      if (!floorFromHead) {
         floors[chain.chainId] = 0;
         return;
       }
@@ -78,11 +86,12 @@ async function resolveActivationFloors(): Promise<Record<number, number>> {
         const height = await hypersyncHeight(chain.chainId);
         floors[chain.chainId] = Math.max(0, height - ACTIVATION_MARGIN_BLOCKS);
       } catch (err) {
-        log("warn", "pollerActivationFloor:height_failed", { err: String(err) });
+        log("warn", "pollerActivationFloor:height_failed", { chainId: chain.chainId, err: String(err) });
         floors[chain.chainId] = 0;
       }
     }),
   );
+  log("info", "pollerActivationFloor:resolved", { floors: JSON.stringify(floors) });
   return floors;
 }
 
