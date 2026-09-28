@@ -3,7 +3,7 @@
 Envio HyperIndex port of the [CoW programmatic orders ponder indexer](../cow-programmatic-orders-api)
 (now maintained as [cowprotocol/cow-programmatic-orders-api](https://github.com/cowprotocol/cow-programmatic-orders-api)),
 kept 1:1 with upstream's indexing behaviour. Mapped through upstream commit
-`caaa9a3` (behavioral content through `3513133`). Indexes Composable CoW conditional-order
+`609eebb` (behavioral content through `6411e9a`). Indexes Composable CoW conditional-order
 generators, the discrete-order lifecycle (UID precompute → candidate → orderbook-confirmed),
 COWShed proxy ownership, and Aave V3 flash-loan orders on **all 11 supported chains**
 (mainnet, gnosis, arbitrum, avalanche, base, bnb, ink, linea, plasma, polygon, sepolia —

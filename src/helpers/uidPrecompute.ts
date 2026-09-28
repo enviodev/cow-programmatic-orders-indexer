@@ -88,7 +88,7 @@ export async function precomputeAndDiscover(
   if (!precomputed || precomputed.length === 0) return false;
 
   const uids = precomputed.map((o) => o.orderUid);
-  const statuses = await fetchOrderStatusByUids(context, uids);
+  const statuses = await fetchOrderStatusByUids(context, uids, "UidPrecompute");
 
   let wroteDiscrete = false;
   for (const order of precomputed) {

@@ -117,7 +117,7 @@ if (!isTest) {
         let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>>;
         try {
           preflightStatuses = await withTimeout(
-            fetchOrderStatusByUids(context, orphanCandidates.map((c: CandidateRow) => c.orderUid)),
+            fetchOrderStatusByUids(context, orphanCandidates.map((c: CandidateRow) => c.orderUid), "CandidateConfirmer"),
             ORDERBOOK_BATCH_TIMEOUT_MS,
             "CandidateConfirmer:cascade:preflight",
           );
@@ -164,7 +164,7 @@ if (!isTest) {
       if (unconfirmed.length === 0) return;
 
       const uids = unconfirmed.map((c: CandidateRow) => c.orderUid);
-      const statuses = await fetchOrderStatusByUids(context, uids);
+      const statuses = await fetchOrderStatusByUids(context, uids, "CandidateConfirmer");
 
       let confirmed = 0;
       const confirmedGeneratorIds: string[] = [];
@@ -197,7 +197,7 @@ if (!isTest) {
 
       if (stale.length > 0) {
         const staleStatuses = await fetchOrderStatusByUids(
-          context, stale.map((c: CandidateRow) => c.orderUid),
+          context, stale.map((c: CandidateRow) => c.orderUid), "CandidateConfirmer",
         );
 
         // TWAP parts can age out of /by_uids before CandidateConfirmer sees them.

@@ -57,7 +57,7 @@ if (!isTest) {
 
       if (openOrders.length > 0) {
         const uids = openOrders.map((o: { orderUid: string }) => o.orderUid);
-        const statuses = await fetchOrderStatusByUids(context, uids);
+        const statuses = await fetchOrderStatusByUids(context, uids, "OrderStatusTracker");
 
         let updated = 0;
         const updatedGeneratorIds: string[] = [];
@@ -125,6 +125,7 @@ if (!isTest) {
           const softStatuses = await fetchOrderStatusByUids(
             context,
             softCandidates.map((o: { orderUid: string }) => o.orderUid),
+            "OrderStatusTracker",
           );
 
           let reverted = 0;

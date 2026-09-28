@@ -197,6 +197,8 @@ export async function fetchAccountOrdersRaw(
 export async function fetchOrdersByUidsRaw(
   apiBaseUrl: string,
   uids: string[],
+  // Log tag: which chain and handler asked (upstream 6411e9a).
+  source?: { chainId: number; handler: string },
 ): Promise<OrderbookOrder[]> {
   if (uids.length === 0) return [];
 
@@ -222,14 +224,14 @@ export async function fetchOrdersByUidsRaw(
         return raw.flatMap((item) => (item?.order != null ? [item.order] : []));
       } catch (err) {
         if (err instanceof OrderbookUnavailableError) {
-          log("error", "ob:unavailable", { endpoint: "ob:byUids", status: err.status, uids: chunk.length, offset: idx * BATCH_SIZE });
+          log("error", "ob:unavailable", { endpoint: "ob:byUids", status: err.status, uids: chunk.length, offset: idx * BATCH_SIZE, ...source });
           return [] as OrderbookOrder[];
         }
         if (err instanceof TimeoutError) {
-          log("warn", "ob:batchFetchTimeout", { uids: chunk.length, offset: idx * BATCH_SIZE, after: ORDERBOOK_HTTP_TIMEOUT_MS });
+          log("warn", "ob:batchFetchTimeout", { uids: chunk.length, offset: idx * BATCH_SIZE, after: ORDERBOOK_HTTP_TIMEOUT_MS, ...source });
           return [] as OrderbookOrder[];
         }
-        log("warn", "ob:batchFetchFailed", { err: String(err), offset: idx * BATCH_SIZE });
+        log("warn", "ob:batchFetchFailed", { err: String(err), offset: idx * BATCH_SIZE, ...source });
         return [] as OrderbookOrder[];
       }
     }),
@@ -375,7 +377,9 @@ export const orderbookAccountHistoryPage = createEffect(
 export const orderbookOrdersByUids = createEffect(
   {
     name: "orderbookOrdersByUids",
-    input: S.schema({ uidsJson: S.string }),
+    // handler is a log tag only. It is constant per call site, so preload/main
+    // dedupe still works, and cache:false means no cached entries to invalidate.
+    input: S.schema({ uidsJson: S.string, handler: S.string }),
     output: S.string, // JSON OrderbookOrder[]
     cache: false, // statuses change over time; terminal results are cached in OrderUidCache
     // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint
@@ -388,7 +392,7 @@ export const orderbookOrdersByUids = createEffect(
     const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
     if (!apiBaseUrl) return "[]";
     const uids = JSON.parse(input.uidsJson) as string[];
-    const orders = await fetchOrdersByUidsRaw(apiBaseUrl, uids);
+    const orders = await fetchOrdersByUidsRaw(apiBaseUrl, uids, { chainId: context.chain.id, handler: input.handler });
     return JSON.stringify(orders);
   },
 );
