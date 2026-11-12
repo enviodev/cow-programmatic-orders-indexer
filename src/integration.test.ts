@@ -99,6 +99,34 @@ describe("ConditionalOrderGenerator creation", () => {
   }, 60_000);
 });
 
+// ─── StopLoss UID precompute (upstream 9db52cd) ─────────────────────────────
+
+describe("StopLoss UID precompute", () => {
+  it("should precompute the UID of a real settled StopLoss sell order", async () => {
+    const indexer = createTestIndexer();
+
+    // Block 48740161 on Gnosis creates a StopLoss sell order (isSellOrder=true)
+    // that settled in tx 0x2a692d7aeb9e8197b9db6a5c860cffb8c427c1a0ba7f7783bfb2f0ca699e890d.
+    // Hashing the stored JSON flags ("true" vs true) used to produce a BUY-order UID.
+    await indexer.process({
+      chains: {
+        100: { startBlock: 48740161, endBlock: 48740161 },
+      },
+    });
+
+    const settledUid =
+      "0x3a9bb4cd4d2362914750638f970e5297b43065813ea49718fc07b4590818b391d93adad902605beaded29a805d499250be43656c6bbbd215";
+    const generator = await indexer.ConditionalOrderGenerator.get("48740161_52");
+    expect(generator?.orderType).toBe("StopLoss");
+    expect(generator?.decodedParams).toMatchObject({ isSellOrder: true, isPartiallyFillable: false });
+
+    const discrete = await indexer.DiscreteOrder.get(settledUid);
+    expect(discrete?.conditionalOrderGenerator_id).toBe("48740161_52");
+    expect(discrete?.status).toBe("Fulfilled");
+    expect(generator?.status).toBe("Completed");
+  }, 60_000);
+});
+
 // ─── COWShed proxy creation ─────────────────────────────────────────────────
 
 describe("COWShed proxy creation", () => {
