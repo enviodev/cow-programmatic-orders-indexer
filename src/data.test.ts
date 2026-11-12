@@ -29,3 +29,11 @@ describe("ORDERBOOK_API_URLS", () => {
     expect(urls[100]).toBe("http://proxy/xdai");
   });
 });
+
+describe("RECHECK_INTERVAL_BLOCKS_BY_CHAIN_ID", () => {
+  it("keeps Base's 40s orderbook recheck at 200ms blocks", async () => {
+    vi.resetModules();
+    const { RECHECK_INTERVAL_BLOCKS_BY_CHAIN_ID } = await import("./data.js");
+    expect(RECHECK_INTERVAL_BLOCKS_BY_CHAIN_ID[8453]).toBe(200n);
+  });
+});

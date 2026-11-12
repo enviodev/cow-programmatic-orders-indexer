@@ -93,6 +93,11 @@ chains:
 
   - id: 8453 # Base
     start_block: 21794150
+    # 200ms blocks since the Denim hardfork (2026-11-05). envio's default depth
+    # (199 blocks) was ~400s of reorg protection at 2s blocks but is only ~40s
+    # now; 2000 blocks keeps the ~400s window. (Upstream d9d313e raised ponder's
+    # Base finality to 300 blocks for the same reason.)
+    max_reorg_depth: 2000
     contracts:
       - name: ComposableCoW
         address: "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
