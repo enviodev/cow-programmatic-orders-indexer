@@ -84,5 +84,5 @@ elevated limits CoW suggests contacting bd@cow.fi.
 
 ## Pre-requisites
 
-- [Node.js v22+](https://nodejs.org/en/download/current), [pnpm](https://pnpm.io/installation),
+- [Node.js v22.15+](https://nodejs.org/en/download/current), [pnpm](https://pnpm.io/installation),
   [Docker](https://www.docker.com/products/docker-desktop/) (for the local Postgres/Hasura).
