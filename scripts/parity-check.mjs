@@ -1,139 +1,209 @@
 /**
  * Parity check: cowprotocol's deployed ponder indexer vs our envio indexer.
  *
- * THEIRS (ponder):  https://programmatic-orders.cow.fi/graphql
- * OURS   (envio):   https://indexer.us.hyperindex.xyz/c63fb37/v1/graphql
+ *   THEIRS_URL  ponder GraphQL   (default https://programmatic-orders.cow.fi/graphql)
+ *   OURS_URL    envio Hasura     (default http://localhost:8080/v1/graphql)
+ *   OURS_ADMIN_SECRET            optional x-hasura-admin-secret for OURS
+ *   CHAINS      comma-separated chain ids (default: all 11)
+ *   MAX_ROWS    per-chain cap on rows fetched from each side (default 50000)
  *
- * Theirs is mid-backfill (mainnet ~18.85M, gnosis ~29.4M) while ours is at the
- * tip, so:
- *  - Generators join on `hash` (chain-scoped params hash — stable across both).
- *  - Discrete orders join on `orderUid`.
- *  - Identity fields (owner, salt, staticInput, orderType, decodedParams,
- *    amounts, validTo) must match exactly.
- *  - Lifecycle fields (status, executed amounts, historyBackfilled) are
- *    reported as "drift" — ours has processed 2.5+ years more chain and ran
- *    the tip drains, so differences there are expected, not bugs.
+ * Usage: node scripts/parity-check.mjs
+ *
+ * Either side may be mid-sync, so each chain is compared only up to OUR
+ * progress block (chain_metadata.latest_processed_block); their rows past it
+ * are ignored. Within that range the generator sets are compared in full, so
+ * every "missing" row is a real gap, not a sampling artefact.
+ *
+ *  - Generators join on (hash, txHash): the same params hash can be created
+ *    more than once, with one row per creation on both sides.
+ *    Identity fields must match; lifecycle fields (status, resolvedOwner) are
+ *    reported as drift, since they move while either side polls.
+ *  - Precomputed UIDs: for deterministic generators (TWAP, StopLoss,
+ *    CirclesBackingOrder) that both sides have precomputed, the set of
+ *    discrete + candidate order UIDs must match exactly. Ours defers
+ *    historical precompute to the tip (precomputePending), so a chain still
+ *    backfilling has few comparable generators.
+ *  - Discrete orders present on both sides: amounts and validTo must match.
+ *
+ * Exits non-zero on any identity mismatch or missing row.
  */
 
 const THEIRS = process.env.THEIRS_URL ?? "https://programmatic-orders.cow.fi/graphql";
-const OURS = process.env.OURS_URL ?? "https://indexer.us.hyperindex.xyz/0b7a2d6/v1/graphql";
-const SAMPLE = Number(process.env.SAMPLE ?? 50);
+const OURS = process.env.OURS_URL ?? "http://localhost:8080/v1/graphql";
+const OURS_HEADERS = process.env.OURS_ADMIN_SECRET
+  ? { "x-hasura-admin-secret": process.env.OURS_ADMIN_SECRET }
+  : {};
+const CHAINS = (process.env.CHAINS ?? "1,56,100,137,8453,9745,42161,43114,57073,59144,11155111")
+  .split(",").map(Number);
+const MAX_ROWS = Number(process.env.MAX_ROWS ?? 50_000);
+const DETERMINISTIC = new Set(["TWAP", "StopLoss", "CirclesBackingOrder"]);
 
-async function gql(url, query, variables) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables }),
-  });
-  const body = await res.json();
-  if (body.errors) throw new Error(`${url}: ${JSON.stringify(body.errors).slice(0, 500)}`);
-  return body.data;
+async function gql(url, query, variables, headers = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ query, variables }),
+    });
+    if ((res.status === 429 || res.status >= 500) && attempt < 5) {
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+      continue;
+    }
+    const body = await res.json();
+    if (body.errors) throw new Error(`${url}: ${JSON.stringify(body.errors).slice(0, 500)}`);
+    return body.data;
+  }
+}
+const ours = (query, variables) => gql(OURS, query, variables, OURS_HEADERS);
+
+/** Page through a ponder list field (cursor pagination, 1000 per page). */
+async function theirsAll(field, where, selection) {
+  const rows = [];
+  let after = null;
+  do {
+    const d = await gql(THEIRS, `query($w: ${field}Filter, $after: String) {
+      ${field}s(where: $w, limit: 1000, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        items { ${selection} }
+      }
+    }`, { w: where, after });
+    const page = d[`${field}s`];
+    rows.push(...page.items);
+    after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (after && rows.length < MAX_ROWS);
+  return rows;
+}
+
+/** Page through a Hasura table (offset pagination, 1000 per page). */
+async function oursAll(table, where, selection) {
+  const rows = [];
+  for (let offset = 0; rows.length < MAX_ROWS; offset += 1000) {
+    const d = await ours(`query($w: ${table}_bool_exp, $o: Int!) {
+      ${table}(where: $w, limit: 1000, offset: $o, order_by: { id: asc }) { ${selection} }
+    }`, { w: where, o: offset });
+    rows.push(...d[table]);
+    if (d[table].length < 1000) break;
+  }
+  return rows;
 }
 
 const norm = (s) => (s == null ? null : String(s).toLowerCase());
-const normStatus = (s) => norm(s); // ours is capitalized, theirs lowercase
-const normJson = (o) => (o == null ? null : JSON.stringify(Object.fromEntries(Object.entries(o).sort())));
+const str = (s) => (s == null ? null : String(s));
+const sortedJson = (o) => (o == null ? null : JSON.stringify(Object.fromEntries(Object.entries(o).sort())));
+const genKey = (g) => `${g.hash}|${norm(g.txHash)}`;
+const show = (rows, n, fmt) => rows.slice(0, n).forEach((r) => console.log(`    ${fmt(r)}`));
 
-function diffRows(label, pairs, fields, driftFields) {
-  let exact = 0;
-  const mismatches = [];
-  const drifts = [];
-  for (const [theirs, ours] of pairs) {
-    const bad = fields.filter(([name, ft, fo]) => ft(theirs) !== fo(ours));
-    const drift = driftFields.filter(([name, ft, fo]) => ft(theirs) !== fo(ours));
-    if (bad.length === 0) exact++;
-    else mismatches.push({ key: theirs.hash ?? theirs.orderUid, fields: bad.map(([n, ft, fo]) => `${n}: theirs=${ft(theirs)} ours=${fo(ours)}`) });
-    if (drift.length > 0) drifts.push({ key: theirs.hash ?? theirs.orderUid, fields: drift.map(([n, ft, fo]) => `${n}: theirs=${ft(theirs)} ours=${fo(ours)}`) });
+const GEN_IDENTITY = [
+  ["owner", (x) => norm(x.owner)],
+  ["handler", (x) => norm(x.handler)],
+  ["salt", (x) => norm(x.salt)],
+  ["staticInput", (x) => norm(x.staticInput)],
+  ["orderType", (x) => x.orderType],
+  ["decodedParams", (x) => sortedJson(x.decodedParams)],
+  ["decodeError", (x) => x.decodeError ?? null],
+];
+const GEN_DRIFT = [
+  ["status", (x) => norm(x.status)], // ours is capitalized, theirs lowercase
+  ["resolvedOwner", (x) => norm(x.resolvedOwner)],
+];
+const ORDER_IDENTITY = [
+  ["sellAmount", (x) => str(x.sellAmount)],
+  ["buyAmount", (x) => str(x.buyAmount)],
+  ["feeAmount", (x) => str(x.feeAmount)],
+  ["validTo", (x) => str(x.validTo)],
+];
+
+function compareFields(pairs, fields) {
+  const out = [];
+  for (const [t, o, key] of pairs) {
+    const diffs = fields.filter(([, f]) => f(t) !== f(o)).map(([n, f]) => `${n}: theirs=${f(t)} ours=${f(o)}`);
+    if (diffs.length) out.push({ key, diffs });
   }
-  console.log(`\n── ${label}: ${pairs.length} joined, ${exact} identity-exact, ${mismatches.length} MISMATCHED, ${drifts.length} with lifecycle drift`);
-  for (const m of mismatches.slice(0, 10)) console.log(`  ✗ ${m.key}\n      ${m.fields.join("\n      ")}`);
-  for (const d of drifts.slice(0, 5)) console.log(`  ~ drift ${d.key}: ${d.fields.join("; ")}`);
-  return mismatches.length;
+  return out;
 }
+
+const meta = await ours(`{ chain_metadata { chain_id latest_processed_block } }`);
+const progress = new Map(meta.chain_metadata.map((c) => [c.chain_id, c.latest_processed_block]));
 
 let failures = 0;
+const summary = [];
 
-for (const chainId of [1, 100]) {
-  // ── Generators ────────────────────────────────────────────────────────────
-  const t = await gql(THEIRS, `query($n: Int!, $c: Int!) {
-    conditionalOrderGenerators(where: { chainId: $c }, orderBy: "hash", orderDirection: "asc", limit: $n) {
-      items { hash owner resolvedOwner handler salt staticInput orderType status decodedParams decodeError txHash historyBackfilled }
+for (const chainId of CHAINS) {
+  const head = progress.get(chainId) ?? -1;
+  if (head < 0) {
+    console.log(`\n═══ chain ${chainId}: skipped (ours has not committed any block yet)`);
+    summary.push({ chainId, skipped: true });
+    continue;
+  }
+
+  // ── Generators ──────────────────────────────────────────────────────────
+  const GEN_FIELDS = "hash owner resolvedOwner handler salt staticInput orderType status decodedParams decodeError txHash";
+  const theirGensAll = await theirsAll("conditionalOrderGenerator", { chainId },
+    `eventId ${GEN_FIELDS} transaction { blockNumber }`);
+  const theirGens = theirGensAll.filter((g) => Number(g.transaction?.blockNumber) <= head);
+  const ourGens = await oursAll("ConditionalOrderGenerator", { chainId: { _eq: chainId } },
+    `id ${GEN_FIELDS} allCandidatesKnown precomputePending`);
+
+  const theirByKey = new Map(theirGens.map((g) => [genKey(g), g]));
+  const ourByKey = new Map(ourGens.map((g) => [genKey(g), g]));
+  const missingOurs = theirGens.filter((g) => !ourByKey.has(genKey(g)));
+  const extraOurs = ourGens.filter((g) => !theirByKey.has(genKey(g)));
+  const joined = theirGens.filter((g) => ourByKey.has(genKey(g))).map((g) => [g, ourByKey.get(genKey(g)), genKey(g)]);
+  const genMismatch = compareFields(joined, GEN_IDENTITY);
+  const genDrift = compareFields(joined, GEN_DRIFT);
+
+  console.log(`\n═══ chain ${chainId} (ours at block ${head}) generators: theirs ${theirGens.length} (of ${theirGensAll.length}), ours ${ourGens.length}, joined ${joined.length}`);
+  console.log(`  missing in ours ${missingOurs.length}, only in ours ${extraOurs.length}, identity mismatches ${genMismatch.length}, lifecycle drift ${genDrift.length}`);
+  show(missingOurs, 5, (g) => `missing ${g.orderType} hash=${g.hash} tx=${g.txHash} block=${g.transaction?.blockNumber}`);
+  show(extraOurs, 5, (g) => `only-ours ${g.orderType} id=${g.id} hash=${g.hash} tx=${g.txHash}`);
+  show(genMismatch, 5, (m) => `✗ ${m.key}\n        ${m.diffs.join("\n        ")}`);
+  failures += missingOurs.length + extraOurs.length + genMismatch.length;
+
+  // ── Precomputed UID sets (deterministic generators) ─────────────────────
+  const precomputed = joined.filter(([t, o]) => DETERMINISTIC.has(o.orderType) && o.allCandidatesKnown && !o.precomputePending);
+  let uidMismatch = [];
+  let orderMismatch = [];
+  let ordersCompared = 0;
+  if (precomputed.length > 0) {
+    const ORDER_FIELDS = "orderUid sellAmount buyAmount feeAmount validTo";
+    const [tDisc, tCand, oDisc, oCand] = await Promise.all([
+      theirsAll("discreteOrder", { chainId }, `${ORDER_FIELDS} conditionalOrderGeneratorId status`),
+      theirsAll("candidateDiscreteOrder", { chainId }, `${ORDER_FIELDS} conditionalOrderGeneratorId`),
+      oursAll("DiscreteOrder", { chainId: { _eq: chainId } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id status`),
+      oursAll("CandidateDiscreteOrder", { chainId: { _eq: chainId } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id`),
+    ]);
+    const group = (rows, idField) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = r[idField];
+        if (!m.has(k)) m.set(k, new Set());
+        m.get(k).add(norm(r.orderUid));
+      }
+      return m;
+    };
+    const tUids = group([...tDisc, ...tCand], "conditionalOrderGeneratorId");
+    const oUids = group([...oDisc, ...oCand], "conditionalOrderGenerator_id");
+    for (const [t, o, key] of precomputed) {
+      const a = [...(tUids.get(t.eventId) ?? [])].sort();
+      const b = [...(oUids.get(o.id) ?? [])].sort();
+      if (a.join() !== b.join()) {
+        uidMismatch.push({ key, type: o.orderType, theirs: a.length, ours: b.length, onlyTheirs: a.filter((u) => !b.includes(u)).slice(0, 2), onlyOurs: b.filter((u) => !a.includes(u)).slice(0, 2) });
+      }
     }
-  }`, { n: SAMPLE, c: chainId });
-  const theirGens = t.conditionalOrderGenerators.items;
+    const tByUid = new Map(tDisc.map((d) => [norm(d.orderUid), d]));
+    const pairs = oDisc.filter((d) => tByUid.has(norm(d.orderUid))).map((d) => [tByUid.get(norm(d.orderUid)), d, d.orderUid]);
+    ordersCompared = pairs.length;
+    orderMismatch = compareFields(pairs, ORDER_IDENTITY);
+  }
+  console.log(`  precomputed UID sets compared ${precomputed.length}, mismatched ${uidMismatch.length}; discrete orders compared ${ordersCompared}, mismatched ${orderMismatch.length}`);
+  show(uidMismatch, 5, (m) => `✗ ${m.type} ${m.key}: theirs ${m.theirs} uids, ours ${m.ours}; only-theirs ${m.onlyTheirs.join(",")} only-ours ${m.onlyOurs.join(",")}`);
+  show(orderMismatch, 5, (m) => `✗ ${m.key}\n        ${m.diffs.join("\n        ")}`);
+  failures += uidMismatch.length + orderMismatch.length;
 
-  const o = await gql(OURS, `query($hashes: [String!]!, $c: Int!) {
-    ConditionalOrderGenerator(where: { hash: { _in: $hashes }, chainId: { _eq: $c } }) {
-      hash owner resolvedOwner handler salt staticInput orderType status decodedParams decodeError txHash historyBackfilled chainId
-    }
-  }`, { hashes: theirGens.map((g) => g.hash), c: chainId });
-  // The same params hash can be created on-chain multiple times (one generator
-  // row per creation event on both sides) — join on (hash, txHash).
-  const genKey = (g) => g.hash + "|" + norm(g.txHash);
-  const oursByKey = new Map(o.ConditionalOrderGenerator.map((g) => [genKey(g), g]));
-
-  const missing = theirGens.filter((g) => !oursByKey.has(genKey(g)));
-  console.log(`\n═══ chain ${chainId} generators: theirs sample ${theirGens.length}, found in ours ${theirGens.length - missing.length}, MISSING in ours ${missing.length}`);
-  for (const m of missing.slice(0, 5)) console.log(`  missing hash=${m.hash} owner=${m.owner} type=${m.orderType} tx=${m.txHash}`);
-  failures += missing.length;
-
-  failures += diffRows(
-    `chain ${chainId} generator identity`,
-    theirGens.filter((g) => oursByKey.has(genKey(g))).map((g) => [g, oursByKey.get(genKey(g))]),
-    [
-      ["owner", (x) => norm(x.owner), (x) => norm(x.owner)],
-      ["handler", (x) => norm(x.handler), (x) => norm(x.handler)],
-      ["salt", (x) => norm(x.salt), (x) => norm(x.salt)],
-      ["staticInput", (x) => norm(x.staticInput), (x) => norm(x.staticInput)],
-      ["orderType", (x) => x.orderType, (x) => x.orderType],
-      ["decodedParams", (x) => normJson(x.decodedParams), (x) => normJson(x.decodedParams)],
-      ["decodeError", (x) => x.decodeError ?? null, (x) => x.decodeError ?? null],
-      ["txHash", (x) => norm(x.txHash), (x) => norm(x.txHash)],
-    ],
-    [
-      ["status", (x) => normStatus(x.status), (x) => normStatus(x.status)],
-      ["resolvedOwner", (x) => norm(x.resolvedOwner), (x) => norm(x.resolvedOwner)],
-      ["historyBackfilled", (x) => x.historyBackfilled, (x) => x.historyBackfilled],
-    ],
-  );
-
-  // ── Discrete orders ───────────────────────────────────────────────────────
-  const td = await gql(THEIRS, `query($n: Int!, $c: Int!) {
-    discreteOrders(where: { chainId: $c }, orderBy: "orderUid", orderDirection: "asc", limit: $n) {
-      items { orderUid status sellAmount buyAmount feeAmount validTo creationDate executedSellAmount executedBuyAmount executedFee }
-    }
-  }`, { n: SAMPLE, c: chainId });
-  const theirOrders = td.discreteOrders.items;
-
-  const od = await gql(OURS, `query($uids: [String!]!, $c: Int!) {
-    DiscreteOrder(where: { orderUid: { _in: $uids }, chainId: { _eq: $c } }) {
-      orderUid status sellAmount buyAmount feeAmount validTo creationDate executedSellAmount executedBuyAmount executedFee chainId
-    }
-  }`, { uids: theirOrders.map((d) => d.orderUid), c: chainId });
-  const oursByUid = new Map(od.DiscreteOrder.map((d) => [d.orderUid, d]));
-
-  const missingOrders = theirOrders.filter((d) => !oursByUid.has(d.orderUid));
-  console.log(`\n═══ chain ${chainId} discreteOrders: theirs sample ${theirOrders.length}, found in ours ${theirOrders.length - missingOrders.length}, MISSING in ours ${missingOrders.length}`);
-  for (const m of missingOrders.slice(0, 5)) console.log(`  missing uid=${m.orderUid} status=${m.status}`);
-  failures += missingOrders.length;
-
-  failures += diffRows(
-    `chain ${chainId} discreteOrder identity`,
-    theirOrders.filter((d) => oursByUid.has(d.orderUid)).map((d) => [d, oursByUid.get(d.orderUid)]),
-    [
-      ["sellAmount", (x) => String(x.sellAmount), (x) => String(x.sellAmount)],
-      ["buyAmount", (x) => String(x.buyAmount), (x) => String(x.buyAmount)],
-      ["feeAmount", (x) => String(x.feeAmount), (x) => String(x.feeAmount)],
-      ["validTo", (x) => (x.validTo == null ? null : String(x.validTo)), (x) => (x.validTo == null ? null : String(x.validTo))],
-    ],
-    [
-      ["status", (x) => normStatus(x.status), (x) => normStatus(x.status)],
-      ["creationDate", (x) => String(x.creationDate), (x) => String(x.creationDate)],
-      ["executedSellAmount", (x) => (x.executedSellAmount == null ? null : String(x.executedSellAmount)), (x) => (x.executedSellAmount == null ? null : String(x.executedSellAmount))],
-      ["executedBuyAmount", (x) => (x.executedBuyAmount == null ? null : String(x.executedBuyAmount)), (x) => (x.executedBuyAmount == null ? null : String(x.executedBuyAmount))],
-      ["executedFee", (x) => (x.executedFee == null ? null : String(x.executedFee)), (x) => (x.executedFee == null ? null : String(x.executedFee))],
-    ],
-  );
+  summary.push({ chainId, head, gens: joined.length, missing: missingOurs.length, extra: extraOurs.length, genMismatch: genMismatch.length, uidSets: precomputed.length, uidMismatch: uidMismatch.length, orders: ordersCompared, orderMismatch: orderMismatch.length });
 }
 
-console.log(`\n${failures === 0 ? "✅ PARITY OK (identity fields)" : `❌ ${failures} identity mismatches/missing rows`}`);
+console.log("\n── summary");
+console.table(summary);
+console.log(failures === 0 ? "✅ PARITY OK (identity fields)" : `❌ ${failures} identity mismatches / missing rows`);
+process.exit(failures === 0 ? 0 : 1);
