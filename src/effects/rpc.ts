@@ -60,6 +60,11 @@ const CHAINS: Record<number, Chain> = {
 
 const clients = new Map<number, PublicClient>();
 
+/** True when ENVIO_RPC_URL_<chainId> is configured, i.e. RPC-backed effects can run. */
+export function hasRpc(chainId: number): boolean {
+  return !!process.env[`ENVIO_RPC_URL_${chainId}`];
+}
+
 function getClient(chainId: number): PublicClient | null {
   let client = clients.get(chainId);
   if (!client) {

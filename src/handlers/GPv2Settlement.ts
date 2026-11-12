@@ -16,7 +16,7 @@
 
 import { indexer } from "envio";
 import { AAVE_V3_ROUTER_ADDRESSES } from "../data.js";
-import { scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
+import { hasRpc, scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
 import { persistAaveCandidates } from "../helpers/aaveSettlement.js";
 import { log } from "../helpers/logger.js";
 import { env } from "../helpers/env.js";
@@ -41,11 +41,15 @@ indexer.onEvent(
 
     let candidates: AaveSettlementCandidate[];
     try {
+      // Without RPC the scan can only fail. Fail before the effect: it is
+      // rate-limited, so doomed calls would still queue for admission and
+      // hold the batch open (~430 Linea settlements ≈ 45s per batch).
+      if (!hasRpc(chainId)) throw new Error(`[COW:scan-unavailable] no-rpc: ENVIO_RPC_URL_${chainId} unset`);
       const candidatesJson = await context.effect(scanAaveSettlement, { txHash, blockNumber: event.block.number });
       candidates = JSON.parse(candidatesJson) as AaveSettlementCandidate[];
     } catch (err) {
-      // Transport failure — queue for FlashLoanScanRetrier instead of losing
-      // the settlement (upstream's behaviour) or caching the failure.
+      // Transport failure or no RPC — queue for FlashLoanScanRetrier instead of
+      // losing the settlement (upstream's behaviour) or caching the failure.
       context.PendingSettlementScan.set({
         id: txHash,
         txHash,

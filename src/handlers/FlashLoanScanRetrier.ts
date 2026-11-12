@@ -9,7 +9,7 @@
  */
 
 import { indexer } from "envio";
-import { scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
+import { hasRpc, scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
 import { persistAaveCandidates } from "../helpers/aaveSettlement.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
@@ -25,6 +25,10 @@ if (!isTest) {
     },
     async ({ block, context }) => {
       const chainId = context.chain.id;
+      // No RPC: every retry would fail and burn an attempt, so scans deferred
+      // for lack of RPC could never recover once one is configured. Leave
+      // them pending (and skip the getWhere) until ENVIO_RPC_URL_<chainId> is set.
+      if (!hasRpc(chainId)) return;
       const cap = resolveCap(
         `MAX_SCAN_RETRIES_PER_BLOCK_${chainId}`,
         DEFAULT_MAX_SCAN_RETRIES_PER_BLOCK,
