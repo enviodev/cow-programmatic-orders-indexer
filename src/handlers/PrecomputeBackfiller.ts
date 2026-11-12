@@ -11,10 +11,9 @@
  */
 
 import { indexer } from "envio";
-import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
+import { decodedOrderFromGenerator, precomputeAndDiscover } from "../helpers/uidPrecompute.js";
 import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { log } from "../helpers/logger.js";
-import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
 
 const DEFAULT_MAX_PRECOMPUTES_PER_BLOCK = 25;
@@ -63,17 +62,15 @@ if (!isTest) {
         // Upstream precomputes inline at creation, so its rows carry the
         // creation block's timestamp as creationDate. The deferred drain must
         // do the same — the generator id embeds its creation block, and the
-        // cached getBlockTimestamp effect resolves the header. (TWAP t0 was
-        // already resolved at creation and stored in decodedParams, so only
-        // creationDate depends on this timestamp.)
+        // cached getBlockTimestamp effect resolves the header. The same
+        // timestamp resolves TWAP t0 = 0 when the staticInput is re-decoded.
         const creationBlock = Number(gen.id.split("_")[0]);
         const creationTs = await blockTimestamp(context, { number: creationBlock });
         await precomputeAndDiscover(
           context,
           gen.id,
           gen.owner as Hex,
-          gen.orderType as OrderType,
-          (gen.decodedParams ?? null) as Record<string, string> | null,
+          decodedOrderFromGenerator(gen, creationTs),
           creationTs,
           BigInt(block.number),
         );

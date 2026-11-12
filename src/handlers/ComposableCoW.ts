@@ -22,9 +22,13 @@
 
 import { indexer } from "envio";
 import { encodeAbiParameters, keccak256, type Hex } from "viem";
-import { getOrderTypeFromHandler, isNonDeterministic, isOwnerBackfillEligible, type OrderType } from "../utils/order-types.js";
+import { getOrderTypeFromHandler, isNonDeterministic, isOwnerBackfillEligible } from "../utils/order-types.js";
 import { decodeStaticInput } from "../decoders/index.js";
-import { precomputeAndDiscover } from "../helpers/uidPrecompute.js";
+import {
+  precomputeAndDiscover,
+  serializeDecodedParams,
+  type GeneratorDecodedOrder,
+} from "../helpers/uidPrecompute.js";
 import { ZERO_TOTALS } from "../helpers/executedAmounts.js";
 import { circlesImmutables } from "../effects/rpc.js";
 import { log } from "../helpers/logger.js";
@@ -43,8 +47,7 @@ async function insertGenerator(
 ): Promise<{
   generatorId: string;
   ownerAddress: Hex;
-  decodedParams: Record<string, string> | null;
-  orderType: OrderType;
+  decodedOrder: GeneratorDecodedOrder;
 }> {
   const { owner, params } = event.params;
   const { handler, salt, staticInput } = params;
@@ -75,47 +78,41 @@ async function insertGenerator(
     log("info", "composableCow:created", { event: generatorId, chainId, orderType, block: String(event.block.number) });
   }
 
-  // Decode staticInput; for CirclesBackingOrder, also merge in handler immutables.
-  let decodedParams: Record<string, string> | null = null;
+  // Decode staticInput into native values; for CirclesBackingOrder, also merge
+  // in handler immutables. Bigints are serialized only for storage, below.
+  let decodedOrder: GeneratorDecodedOrder = { orderType, decodedParams: null };
   let decodeError: string | null = null;
 
   if (orderType !== "Unknown") {
     try {
-      const decoded = (decodeStaticInput(orderType, staticInput as Hex) ?? null) as
-        | Record<string, unknown>
-        | null;
-      // Resolve t0=0: the contract uses block.timestamp when staticInput has t0=0.
-      // Store the resolved value so precompute always has the real start time.
-      if (
-        decoded &&
-        orderType === "TWAP" &&
-        BigInt((decoded.t0 as bigint) ?? 0n) === 0n
-      ) {
-        decoded.t0 = BigInt(event.block.timestamp);
+      const decoded = decodeStaticInput(orderType, staticInput as Hex);
+      // Resolve t0=0 before storing or calculating TWAP parts: the contract uses
+      // block.timestamp when staticInput has t0=0.
+      if (decoded?.orderType === "TWAP" && decoded.decodedParams.t0 === 0n) {
+        decoded.decodedParams.t0 = BigInt(event.block.timestamp);
       }
-      decodedParams = decoded
-        ? (JSON.parse(
-            JSON.stringify(decoded, (_key, value) =>
-              typeof value === "bigint" ? value.toString() : value,
-            ),
-          ) as Record<string, string>)
-        : null;
 
-      if (orderType === "CirclesBackingOrder" && decodedParams) {
-        const immutablesJson = await context.effect(circlesImmutables, {
+      if (decoded?.orderType === "CirclesBackingOrder") {
+        // Throws on RPC failure (not cached) → handled as a decode failure, like upstream.
+        const immutablesJson: string | null = await context.effect(circlesImmutables, {
           handler: handler.toLowerCase(),
         });
-        if (immutablesJson) {
-          const { sellToken, sellAmount } = JSON.parse(immutablesJson) as {
-            sellToken: string;
-            sellAmount: string;
-          };
-          decodedParams = { ...decodedParams, sellToken, sellAmount };
-        }
+        if (!immutablesJson) throw new Error("circlesImmutables unavailable");
+        const immutables = JSON.parse(immutablesJson) as { sellToken: Hex; sellAmount: string };
+        decodedOrder = {
+          orderType: decoded.orderType,
+          decodedParams: {
+            ...decoded.decodedParams,
+            sellToken: immutables.sellToken,
+            sellAmount: BigInt(immutables.sellAmount),
+          },
+        };
+      } else if (decoded) {
+        decodedOrder = decoded;
       }
     } catch (err) {
       log("warn", "composableCow:decodeFailed", { event: generatorId, orderType, err: String(err) });
-      decodedParams = null;
+      decodedOrder = { orderType, decodedParams: null };
       decodeError = "invalid_static_input";
     }
   }
@@ -149,7 +146,7 @@ async function insertGenerator(
       hash,
       orderType,
       status: "Active",
-      decodedParams: decodedParams ?? undefined,
+      decodedParams: serializeDecodedParams(decodedOrder.decodedParams) ?? undefined,
       decodeError: decodeError ?? undefined,
       additionalData: orderType === "TWAP" ? ZERO_TOTALS : undefined,
       txHash: event.transaction.hash,
@@ -173,7 +170,7 @@ async function insertGenerator(
     });
   }
 
-  return { generatorId, ownerAddress, decodedParams, orderType };
+  return { generatorId, ownerAddress, decodedOrder };
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -185,7 +182,7 @@ indexer.onEvent(
   async ({ event, context }) => {
     // Tests process pinned historical ranges but assert live semantics.
     const isLive = context.chain.isRealtime || isTestEnv;
-    const { generatorId, ownerAddress, decodedParams, orderType } =
+    const { generatorId, ownerAddress, decodedOrder } =
       await insertGenerator(event, context, isLive);
 
     // Pre-compute UIDs for deterministic order types (TWAP, StopLoss,
@@ -194,7 +191,7 @@ indexer.onEvent(
     // tip so the chain backfill never blocks on orderbook I/O.
     if (isLive) {
       await precomputeAndDiscover(
-        context, generatorId, ownerAddress, orderType, decodedParams,
+        context, generatorId, ownerAddress, decodedOrder,
         BigInt(event.block.timestamp), BigInt(event.block.number),
       );
     }

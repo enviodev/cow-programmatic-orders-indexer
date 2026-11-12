@@ -514,13 +514,16 @@ export const circlesImmutables = createEffect(
   {
     name: "circlesImmutables",
     input: S.schema({ handler: S.string }),
-    output: S.union([S.string, null]), // JSON { sellToken, sellAmount } | null on failure
+    // JSON { sellToken, sellAmount }. Failures THROW rather than return null:
+    // thrown effects are not cached, so a transient RPC error is retried on the
+    // next generator instead of being cached forever (upstream throws too).
+    output: S.union([S.string, null]), // null only from caches written before the throw change
     cache: true, // contract immutables never change
     rateLimit: { calls: 5, per: "second" as const },
   },
   async ({ input, context }): Promise<string | null> => {
     const client = getClient(context.chain.id);
-    if (!client) return null;
+    if (!client) throw new Error(`circlesImmutables: no RPC client for chain ${context.chain.id}`);
     const handler = input.handler as `0x${string}`;
 
     try {
@@ -542,7 +545,7 @@ export const circlesImmutables = createEffect(
       });
     } catch (err) {
       log("warn", "circlesImmutables:read_failed", { handler, err: String(err) });
-      return null;
+      throw err;
     }
   },
 );

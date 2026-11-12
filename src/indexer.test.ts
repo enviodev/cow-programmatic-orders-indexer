@@ -506,10 +506,12 @@ describe("decodeStaticInput Router", () => {
   });
 
   it("should route TWAP to the TWAP decoder", () => {
-    const result = decodeStaticInput("TWAP", REAL_TWAP_STATIC_INPUT as Hex) as Record<string, unknown>;
-    expect(result.sellToken).toBeDefined();
-    expect(result.buyToken).toBeDefined();
-    expect(typeof result.n).toBe("bigint");
+    const result = decodeStaticInput("TWAP", REAL_TWAP_STATIC_INPUT as Hex);
+    expect(result?.orderType).toBe("TWAP");
+    if (result?.orderType !== "TWAP") return;
+    expect(result.decodedParams.sellToken).toBeDefined();
+    expect(result.decodedParams.buyToken).toBeDefined();
+    expect(typeof result.decodedParams.n).toBe("bigint");
   });
 });
 
@@ -587,22 +589,25 @@ describe("computeOrderUid", () => {
 });
 
 describe("precomputeOrderUids", () => {
-  const twapParams = {
-    sellToken: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-    buyToken: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-    receiver: "0x0000000000000000000000000000000000000000",
-    partSellAmount: "1000000",
-    minPartLimit: "1",
-    t0: "1692000000",
-    n: "5",
-    t: "3600",
-    span: "0",
-    appData: "0x" + "00".repeat(32),
-  };
+  const twapOrder = () => ({
+    orderType: "TWAP" as const,
+    decodedParams: {
+      sellToken: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      buyToken: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      receiver: "0x0000000000000000000000000000000000000000",
+      partSellAmount: 1000000n,
+      minPartLimit: 1n,
+      t0: 1692000000n,
+      n: 5n,
+      t: 3600n,
+      span: 0n,
+      appData: "0x" + "00".repeat(32),
+    },
+  });
   const owner = "0xe7602ca44f83a5e9ba8bd14125ddcb295f3d63bd" as Hex;
 
   it("should enumerate all TWAP part UIDs with contract validTo math", () => {
-    const orders = precomputeOrderUids(1, owner, "TWAP", twapParams, 1692000000n);
+    const orders = precomputeOrderUids(1, owner, twapOrder(), 1692000000n);
     expect(orders).not.toBeNull();
     expect(orders!.length).toBe(5);
     // span=0: validTo_i = t0 + (i+1)*t - 1
@@ -613,14 +618,8 @@ describe("precomputeOrderUids", () => {
     }
   });
 
-  it("should return null for non-deterministic types", () => {
-    expect(precomputeOrderUids(1, owner, "PerpetualSwap", twapParams, 0n)).toBeNull();
-    expect(precomputeOrderUids(1, owner, "SwapOrderHandler", twapParams, 0n)).toBeNull();
-  });
-
   it("should return null when params are missing", () => {
-    expect(precomputeOrderUids(1, owner, "TWAP", null, 0n)).toBeNull();
-    expect(precomputeOrderUids(1, owner, "TWAP", { n: "5" }, 0n)).toBeNull();
+    expect(precomputeOrderUids(1, owner, { orderType: "TWAP", decodedParams: null }, 0n)).toBeNull();
   });
 });
 
