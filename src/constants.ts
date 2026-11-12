@@ -60,25 +60,36 @@ export const DETERMINISTIC_CANCEL_SWEEP_INTERVAL = 100n;
 export const ORDERBOOK_HTTP_TIMEOUT_MS = 10_000;
 
 /**
- * Bounded retry for transient orderbook failures (HTTP 429 / 5xx).
+ * Bounded retry for transient orderbook failures (HTTP 429 / 5xx), as upstream.
  *
- * Upstream caps a single sleep at 2s / 4s total because ponder block handlers
- * hold a Postgres transaction open across the call. Envio effects hold
- * nothing, so we can honor api.cow.fi's actual Retry-After (observed: 30s
- * penalties) — retrying inside the penalty window just earns another 429.
- * The shared HTTP semaphore turns these sleeps into natural backpressure.
+ * Block handlers await these calls and envio commits no chain's batch until
+ * they return, so the loop stays short: a long sleep here stalls indexing on
+ * every chain. A 429's Retry-After is honored by the request pacer instead
+ * (helpers/orderbook/pacer.ts), which refuses requests during the penalty
+ * rather than sleeping through it; the next poll retries.
  */
-export const ORDERBOOK_MAX_RETRIES = 5;
+export const ORDERBOOK_MAX_RETRIES = 2; // ≤ 3 attempts total
 export const ORDERBOOK_RETRY_BASE_MS = 250; // exponential backoff base
-export const ORDERBOOK_RETRY_MAX_DELAY_MS = 60_000; // cap on a single sleep (incl. Retry-After)
-export const ORDERBOOK_RETRY_BUDGET_MS = 120_000; // total wall-clock the retry loop may add
+export const ORDERBOOK_RETRY_MAX_DELAY_MS = 2_000; // cap on a single sleep
+export const ORDERBOOK_RETRY_BUDGET_MS = 4_000; // total wall-clock the retry loop may add
 
 /**
- * Outer wall-clock cap for a whole batched status fetch — must accommodate
- * the retry budget above (a batch honoring one 30s Retry-After is healthy,
- * not hung).
+ * Request pacing per endpoint, shared by all chains (api.cow.fi allows ~100
+ * requests/minute per IP per read endpoint). by_uids runs at this rate;
+ * account pages are heavy (up to 3.6MB), so that lane runs at half. Override
+ * with ORDERBOOK_REQUESTS_PER_MINUTE, e.g. when ORDERBOOK_API_URL_TEMPLATE
+ * points at an unthrottled in-cluster API. A request that would wait longer
+ * than ORDERBOOK_PACE_MAX_WAIT_MS for its slot is refused.
  */
-export const ORDERBOOK_BATCH_TIMEOUT_MS = ORDERBOOK_RETRY_BUDGET_MS + 2 * 10_000;
+export const ORDERBOOK_REQUESTS_PER_MINUTE = 80;
+export const ORDERBOOK_PACE_MAX_WAIT_MS = 4_000;
+
+/**
+ * Outer wall-clock cap for a whole batched status fetch: one pacing wait plus
+ * the retry budget and two request timeouts.
+ */
+export const ORDERBOOK_BATCH_TIMEOUT_MS =
+  ORDERBOOK_PACE_MAX_WAIT_MS + ORDERBOOK_RETRY_BUDGET_MS + 2 * ORDERBOOK_HTTP_TIMEOUT_MS;
 
 /**
  * Hard wall-clock cap for a block handler's aggregate multicall

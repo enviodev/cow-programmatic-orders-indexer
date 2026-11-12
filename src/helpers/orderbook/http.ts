@@ -11,6 +11,7 @@ import {
   orderbookOrdersByUids,
   OrderbookUnavailableError,
   type HistoryPageRow,
+  type OrdersByUidsResult,
 } from "../../effects/orderbook.js";
 
 export { type HistoryPageRow };
@@ -68,11 +69,11 @@ export async function fetchOrdersByUids(
   context: any,
   uids: string[],
   handler = "unspecified",
-): Promise<OrderbookOrder[]> {
-  if (uids.length === 0) return [];
+): Promise<OrdersByUidsResult> {
+  if (uids.length === 0) return { orders: [], unanswered: [] };
   const json = await context.effect(orderbookOrdersByUids, {
     uidsJson: JSON.stringify(uids),
     handler,
   });
-  return JSON.parse(json) as OrderbookOrder[];
+  return JSON.parse(json) as OrdersByUidsResult;
 }

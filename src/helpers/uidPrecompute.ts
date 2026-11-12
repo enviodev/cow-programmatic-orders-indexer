@@ -17,7 +17,7 @@ import { isHex, type Hex } from "viem";
 import { computeOrderUid, type GPv2OrderData, KIND_SELL, KIND_BUY, BALANCE_ERC20 } from "./orderUid.js";
 import { fetchOrderStatusByUids } from "./orderbook/client.js";
 import { refreshTwapExecutionState } from "./executedAmounts.js";
-import { toDiscreteStatus } from "./orderbook/types.js";
+import { toDiscreteStatus, type OrderStatusInfo } from "./orderbook/types.js";
 import { type OrderType, DETERMINISTIC_ORDER_TYPE } from "../utils/order-types.js";
 import { decodeStaticInput, type DecodedOrder } from "../decoders/index.js";
 import type { TwapDecodedParams } from "../decoders/twap.js";
@@ -145,6 +145,9 @@ export function precomputeOrderUids(
  * and deactivate the generator if all orders are terminal.
  *
  * Returns true if the generator was deactivated (all orders terminal).
+ *
+ * `prefetched` lets a caller handling many generators fetch every status in
+ * one batched lookup (PrecomputeBackfiller) instead of one request each.
  */
 export async function precomputeAndDiscover(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,13 +157,14 @@ export async function precomputeAndDiscover(
   decodedOrder: GeneratorDecodedOrder,
   blockTimestamp: bigint,
   blockNumber: bigint,
+  prefetched?: Map<string, OrderStatusInfo>,
 ): Promise<boolean> {
   const chainId = context.chain.id;
   const precomputed = precomputeOrderUids(chainId, owner, decodedOrder, blockTimestamp);
   if (!precomputed || precomputed.length === 0) return false;
 
   const uids = precomputed.map((o) => o.orderUid);
-  const statuses = await fetchOrderStatusByUids(context, uids, "UidPrecompute");
+  const statuses = prefetched ?? await fetchOrderStatusByUids(context, uids, "UidPrecompute");
 
   let wroteDiscrete = false;
   for (const order of precomputed) {

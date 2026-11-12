@@ -16,7 +16,7 @@ import { withTimeout } from "../helpers/withTimeout.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
 import { refreshTwapExecutionState } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, targetInterval } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, paced, nextHexBucket, pollerBlockFilter, targetInterval } from "../helpers/blockHandlerShared.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CandidateRow = any;
@@ -81,7 +81,7 @@ if (!isTest) {
       // Target ~5s status checks (upstream fa57952).
       where: ({ chain }) => pollerBlockFilter(chain.id, targetInterval(chain.id, 5)),
     },
-    async ({ block, context }) => {
+    paced("CandidateConfirmer", async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
@@ -114,7 +114,7 @@ if (!isTest) {
       });
 
       if (orphanCandidates.length > 0) {
-        let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>>;
+        let preflightStatuses: Awaited<ReturnType<typeof fetchOrderStatusByUids>> | null;
         try {
           preflightStatuses = await withTimeout(
             fetchOrderStatusByUids(context, orphanCandidates.map((c: CandidateRow) => c.orderUid), "CandidateConfirmer"),
@@ -122,10 +122,13 @@ if (!isTest) {
             "CandidateConfirmer:cascade:preflight",
           );
         } catch {
-          preflightStatuses = new Map();
+          preflightStatuses = null;
         }
 
         for (const c of orphanCandidates) {
+          // Not answered (request refused, failed or timed out): a part filled
+          // before the cancel must not be recorded as cancelled, so retry later.
+          if (!preflightStatuses || preflightStatuses.unanswered.has(c.orderUid)) continue;
           const apiEntry = preflightStatuses.get(c.orderUid);
           await promoteCandidate(
             context, c,
@@ -147,7 +150,7 @@ if (!isTest) {
         );
 
         if (!context.isPreload) {
-          log("info", "CandidateConfirmer:parent_cancelled", { block: String(block.number), chainId, parentCancelled: orphanCandidates.length, preflightKnown: preflightStatuses.size });
+          log("info", "CandidateConfirmer:parent_cancelled", { block: String(block.number), chainId, parentCancelled: orphanCandidates.length, preflightKnown: preflightStatuses?.size ?? 0, deferred: preflightStatuses?.unanswered.size ?? orphanCandidates.length });
         }
       }
 
@@ -193,12 +196,16 @@ if (!isTest) {
         (c: CandidateRow) =>
           !orphanIds.has(c.id) && c.validTo != null && c.validTo <= currentTimestamp,
       );
-      const stale = staleAll.slice(0, 500);
+      const staleBatch = staleAll.slice(0, 500);
+      let stale: CandidateRow[] = [];
 
-      if (stale.length > 0) {
+      if (staleBatch.length > 0) {
         const staleStatuses = await fetchOrderStatusByUids(
-          context, stale.map((c: CandidateRow) => c.orderUid), "CandidateConfirmer",
+          context, staleBatch.map((c: CandidateRow) => c.orderUid), "CandidateConfirmer",
         );
+        // Only candidates the API actually answered for are finalized; the
+        // rest would be wrongly promoted as expired, so they wait a block.
+        stale = staleBatch.filter((c: CandidateRow) => !staleStatuses.unanswered.has(c.orderUid));
 
         // TWAP parts can age out of /by_uids before CandidateConfirmer sees them.
         // For any missed UIDs, fall back to /account/{owner}/orders — one fetch
@@ -262,6 +269,6 @@ if (!isTest) {
       if ((confirmed > 0 || stale.length > 0) && !context.isPreload) {
         log("info", "CandidateConfirmer:DONE", { block: String(block.number), chainId, candidates: unconfirmed.length, confirmed, expired: stale.length });
       }
-    },
+    }),
   );
 }

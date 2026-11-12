@@ -36,7 +36,7 @@ import { fetchComposableOrders, upsertDiscreteOrders } from "../helpers/orderboo
 import { mapWithConcurrency } from "../helpers/concurrency.js";
 import { TimeoutError, withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, paced, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { OWNER_BACKFILL_TYPES } from "../utils/order-types.js";
 import { env } from "../helpers/env.js";
 
@@ -187,9 +187,9 @@ if (!isTest) {
       name: "OwnerBackfillLive",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("OwnerBackfillLive", async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
       await drainOwnerBatch(block, context, "live");
-    },
+    }),
   );
 }

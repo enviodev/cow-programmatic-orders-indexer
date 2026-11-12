@@ -12,7 +12,7 @@ import { indexer } from "envio";
 import { hasRpc, scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
 import { persistAaveCandidates } from "../helpers/aaveSettlement.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, paced, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
 const DEFAULT_MAX_SCAN_RETRIES_PER_BLOCK = 10;
 const MAX_SCAN_ATTEMPTS = 50; // ~worst case: transient outages spanning hours
@@ -23,7 +23,7 @@ if (!isTest) {
       name: "FlashLoanScanRetrier",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("FlashLoanScanRetrier", async ({ block, context }) => {
       const chainId = context.chain.id;
       // No RPC: every retry would fail and burn an attempt, so scans deferred
       // for lack of RPC could never recover once one is configured. Leave
@@ -69,6 +69,6 @@ if (!isTest) {
       if (recovered > 0 && !context.isPreload) {
         log("info", "FlashLoanScanRetrier:DONE", { block: String(block.number), chainId, pending: pending.length, recovered });
       }
-    },
+    }),
   );
 }

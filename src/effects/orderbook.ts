@@ -13,6 +13,8 @@ import { COMPOSABLE_COW_HANDLER_ADDRESSES, ORDERBOOK_API_URLS } from "../data.js
 import {
   ORDERBOOK_HTTP_TIMEOUT_MS,
   ORDERBOOK_MAX_RETRIES,
+  ORDERBOOK_PACE_MAX_WAIT_MS,
+  ORDERBOOK_REQUESTS_PER_MINUTE,
   ORDERBOOK_RETRY_BASE_MS,
   ORDERBOOK_RETRY_BUDGET_MS,
   ORDERBOOK_RETRY_MAX_DELAY_MS,
@@ -24,6 +26,7 @@ import { log } from "../helpers/logger.js";
 import { BATCH_SIZE, PAGE_LIMIT, type OrderbookOrder } from "../helpers/orderbook/types.js";
 import { decodeEip1271Signature } from "../decoders/erc1271-signature.js";
 import { env } from "../helpers/env.js";
+import { RequestPacer } from "../helpers/orderbook/pacer.js";
 
 /**
  * The orderbook API refused to answer (HTTP 429 or 5xx) after bounded retries.
@@ -39,7 +42,38 @@ export class OrderbookUnavailableError extends Error {
   }
 }
 
+/** The request pacer refused to send: the endpoint's lane is full or serving a 429 penalty. */
+export class OrderbookThrottledError extends OrderbookUnavailableError {
+  constructor(endpoint: string) {
+    super(429, endpoint);
+    this.name = "OrderbookThrottledError";
+    this.message = `[COW:orderbook-throttled] ${endpoint} paced locally`;
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+type OrderbookEndpoint = "ob:byUids" | "ob:account";
+
+const requestsPerMinute = Number(env("ORDERBOOK_REQUESTS_PER_MINUTE")) > 0
+  ? Number(env("ORDERBOOK_REQUESTS_PER_MINUTE"))
+  : ORDERBOOK_REQUESTS_PER_MINUTE;
+const PACERS: Record<OrderbookEndpoint, RequestPacer> = {
+  "ob:byUids": new RequestPacer(60_000 / requestsPerMinute, ORDERBOOK_PACE_MAX_WAIT_MS),
+  "ob:account": new RequestPacer(120_000 / requestsPerMinute, ORDERBOOK_PACE_MAX_WAIT_MS),
+};
+
+// Refusals are routine under load, so report them as one line per minute.
+let refused: Partial<Record<OrderbookEndpoint, number>> = {};
+let refusedReportedAt = 0;
+function noteRefused(endpoint: OrderbookEndpoint): void {
+  refused[endpoint] = (refused[endpoint] ?? 0) + 1;
+  const now = Date.now();
+  if (now - refusedReportedAt < 60_000) return;
+  log("warn", "ob:paced", { refused, requestsPerMinute });
+  refused = {};
+  refusedReportedAt = now;
+}
 
 /**
  * Global concurrency cap for orderbook HTTP. Envio's effect rateLimit only
@@ -85,44 +119,52 @@ function parseRetryAfter(value: string | null): number | null {
 }
 
 /**
- * `fetchWithTimeout` plus bounded retry/backoff for transient orderbook errors.
- * On 429 it honors `Retry-After` (capped); on 5xx it uses exponential backoff.
- * Throws OrderbookUnavailableError once retries/budget are exhausted.
+ * `fetchWithTimeout` plus pacing and bounded retry/backoff, as upstream.
+ * On 429 the endpoint's pacer holds every request for the full Retry-After;
+ * this request fails at once if that is longer than it may wait. On 5xx it
+ * backs off exponentially. Throws OrderbookThrottledError when the pacer
+ * refuses, OrderbookUnavailableError once retries or budget run out.
  */
 async function fetchOrderbook(
   url: string,
   init: RequestInit | undefined,
-  endpoint: string,
+  endpoint: OrderbookEndpoint,
 ): Promise<Response> {
-  await acquireHttpSlot();
-  try {
-    return await fetchOrderbookInner(url, init, endpoint);
-  } finally {
-    releaseHttpSlot();
-  }
-}
-
-async function fetchOrderbookInner(
-  url: string,
-  init: RequestInit | undefined,
-  endpoint: string,
-): Promise<Response> {
+  const pacer = PACERS[endpoint];
   let spent = 0;
   for (let attempt = 0; ; attempt++) {
-    const response = await fetchWithTimeout(url, init, ORDERBOOK_HTTP_TIMEOUT_MS, endpoint);
+    const wait = pacer.reserve();
+    if (wait === null) {
+      noteRefused(endpoint);
+      throw new OrderbookThrottledError(endpoint);
+    }
+    if (wait > 0) await sleep(wait);
+
+    await acquireHttpSlot();
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, init, ORDERBOOK_HTTP_TIMEOUT_MS, endpoint);
+    } finally {
+      releaseHttpSlot();
+    }
     if (response.ok) return response;
 
     const retryable = response.status === 429 || response.status >= 500;
-    if (!retryable || attempt >= ORDERBOOK_MAX_RETRIES) {
-      throw new OrderbookUnavailableError(response.status, endpoint);
-    }
-
     const retryAfterMs =
       response.status === 429 ? parseRetryAfter(response.headers.get("retry-after")) : null;
     const backoffMs = ORDERBOOK_RETRY_BASE_MS * 2 ** attempt;
-    const delay = Math.min(retryAfterMs ?? backoffMs, ORDERBOOK_RETRY_MAX_DELAY_MS);
+    if (response.status === 429) pacer.block(retryAfterMs ?? backoffMs);
 
-    // Fail fast rather than linger past our budget.
+    if (!retryable || attempt >= ORDERBOOK_MAX_RETRIES) {
+      throw new OrderbookUnavailableError(response.status, endpoint);
+    }
+    // A penalty longer than we may wait: fail now, the next poll retries.
+    if (retryAfterMs !== null && retryAfterMs > ORDERBOOK_PACE_MAX_WAIT_MS) {
+      throw new OrderbookUnavailableError(response.status, endpoint);
+    }
+
+    const delay = Math.min(retryAfterMs ?? backoffMs, ORDERBOOK_RETRY_MAX_DELAY_MS);
+    // Fail fast rather than hold the batch past our budget.
     if (spent + delay > ORDERBOOK_RETRY_BUDGET_MS) {
       throw new OrderbookUnavailableError(response.status, endpoint);
     }
@@ -178,6 +220,7 @@ export async function fetchAccountOrdersRaw(
       // stays false so bounded drains resume from nextOffset next firing.
       if (maxPages > 0 && pagesFetched >= maxPages) break;
     } catch (err) {
+      if (err instanceof OrderbookThrottledError) break; // counted in ob:paced
       if (err instanceof OrderbookUnavailableError) {
         log("error", "ob:unavailable", { endpoint: "ob:account", status: err.status, owner });
         break;
@@ -194,14 +237,21 @@ export async function fetchAccountOrdersRaw(
   return { orders: allOrders, complete, nextOffset: offset };
 }
 
+/** Orders found by UID, plus the UIDs whose request failed or was refused.
+ *  A UID in neither list was asked and is not on the API. */
+export interface OrdersByUidsResult {
+  orders: OrderbookOrder[];
+  unanswered: string[];
+}
+
 /** Batch-fetch orders by UID (chunks of BATCH_SIZE fired in parallel). */
 export async function fetchOrdersByUidsRaw(
   apiBaseUrl: string,
   uids: string[],
   // Log tag: which chain and handler asked (upstream 6411e9a).
   source?: { chainId: number; handler: string },
-): Promise<OrderbookOrder[]> {
-  if (uids.length === 0) return [];
+): Promise<OrdersByUidsResult> {
+  if (uids.length === 0) return { orders: [], unanswered: [] };
 
   const url = `${apiBaseUrl}/api/v1/orders/by_uids`;
   const chunks: string[][] = [];
@@ -222,23 +272,26 @@ export async function fetchOrdersByUidsRaw(
           "ob:byUids",
         );
         const raw = (await response.json()) as { order: OrderbookOrder }[];
-        return raw.flatMap((item) => (item?.order != null ? [item.order] : []));
+        return { orders: raw.flatMap((item) => (item?.order != null ? [item.order] : [])), unanswered: [] };
       } catch (err) {
+        const failed: OrdersByUidsResult = { orders: [], unanswered: chunk };
+        if (err instanceof OrderbookThrottledError) return failed; // counted in ob:paced
         if (err instanceof OrderbookUnavailableError) {
           log("error", "ob:unavailable", { endpoint: "ob:byUids", status: err.status, uids: chunk.length, offset: idx * BATCH_SIZE, ...source });
-          return [] as OrderbookOrder[];
-        }
-        if (err instanceof TimeoutError) {
+        } else if (err instanceof TimeoutError) {
           log("warn", "ob:batchFetchTimeout", { uids: chunk.length, offset: idx * BATCH_SIZE, after: ORDERBOOK_HTTP_TIMEOUT_MS, ...source });
-          return [] as OrderbookOrder[];
+        } else {
+          log("warn", "ob:batchFetchFailed", { err: String(err), offset: idx * BATCH_SIZE, ...source });
         }
-        log("warn", "ob:batchFetchFailed", { err: String(err), offset: idx * BATCH_SIZE, ...source });
-        return [] as OrderbookOrder[];
+        return failed;
       }
     }),
   );
 
-  return chunkResults.flat();
+  return {
+    orders: chunkResults.flatMap((r) => r.orders),
+    unanswered: chunkResults.flatMap((r) => r.unanswered),
+  };
 }
 
 // ─── Effects ─────────────────────────────────────────────────────────────────
@@ -256,9 +309,10 @@ export const orderbookAccountOrders = createEffect(
     }),
     output: S.string, // JSON { orders: OrderbookOrder[], complete: boolean, nextOffset: number }
     cache: false, // statuses change over time
-    // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint.
-    // Account pages are heavy (up to 3.6MB), so stay well under: 40/min.
-    rateLimit: { calls: 40, per: "minute" as const },
+    // Loose on purpose: the request pacer enforces api.cow.fi's limit across
+    // chains. A tight effect limit queues calls, and a block handler waiting
+    // in that queue holds the batch for every chain.
+    rateLimit: { calls: 20, per: "second" as const },
   },
   async ({ input, context }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
@@ -381,19 +435,17 @@ export const orderbookOrdersByUids = createEffect(
     // handler is a log tag only. It is constant per call site, so preload/main
     // dedupe still works, and cache:false means no cached entries to invalidate.
     input: S.schema({ uidsJson: S.string, handler: S.string }),
-    output: S.string, // JSON OrderbookOrder[]
+    output: S.string, // JSON OrdersByUidsResult
     cache: false, // statuses change over time; terminal results are cached in OrderUidCache
-    // Documented api.cow.fi limit: ~100 req/min per IP per read endpoint
-    // (docs.cow.fi rate-limits reference; exceeding it triggers 429s and a
-    // Cloudflare escalation with 30s penalties). 80/min leaves headroom.
-    // At 100 UIDs per request that is still 8,000 statuses/min.
-    rateLimit: { calls: 80, per: "minute" as const },
+    // Loose on purpose: the request pacer enforces api.cow.fi's limit
+    // (~100 requests/min per IP) across chains. See orderbookAccountOrders.
+    rateLimit: { calls: 20, per: "second" as const },
   },
   async ({ input, context }): Promise<string> => {
     const apiBaseUrl = ORDERBOOK_API_URLS[context.chain.id];
-    if (!apiBaseUrl) return "[]";
     const uids = JSON.parse(input.uidsJson) as string[];
-    const orders = await fetchOrdersByUidsRaw(apiBaseUrl, uids, { chainId: context.chain.id, handler: input.handler });
-    return JSON.stringify(orders);
+    if (!apiBaseUrl) return JSON.stringify({ orders: [], unanswered: uids });
+    const result = await fetchOrdersByUidsRaw(apiBaseUrl, uids, { chainId: context.chain.id, handler: input.handler });
+    return JSON.stringify(result);
   },
 );

@@ -15,7 +15,7 @@ import { toDiscreteStatus } from "../helpers/orderbook/types.js";
 import { bumpGeneratorsUpdatedAt } from "../helpers/updatedAtBlock.js";
 import { refreshTwapExecutionState } from "../helpers/executedAmounts.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap, targetInterval } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, paced, nextHexBucket, pollerBlockFilter, resolveCap, targetInterval } from "../helpers/blockHandlerShared.js";
 
 const VALID_DISCRETE_STATUSES = new Set(["fulfilled", "unfilled", "expired", "cancelled"]);
 
@@ -26,7 +26,7 @@ if (!isTest) {
       // Target ~5s status checks (upstream fa57952).
       where: ({ chain }) => pollerBlockFilter(chain.id, targetInterval(chain.id, 5)),
     },
-    async ({ block, context }) => {
+    paced("OrderStatusTracker", async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
@@ -210,6 +210,6 @@ if (!isTest) {
       // Cascade-cancelled / expired parts can complete their TWAP parent too
       // (upstream ac3353d refreshes after the expiry sweep).
       await refreshTwapExecutionState(context, cascadedGeneratorIds, currentBlock);
-    },
+    }),
   );
 }

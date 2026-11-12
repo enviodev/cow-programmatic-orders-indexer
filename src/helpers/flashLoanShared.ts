@@ -58,6 +58,9 @@ export async function enrichFlashLoanOrders(
   let missing = 0;
 
   for (const order of rows) {
+    // Unanswered (request refused, failed or timed out) is not a miss: leave
+    // the row as is so it doesn't spend one of its enrichment attempts.
+    if (enrichment.unanswered.has(order.orderUid)) continue;
     const info = enrichment.get(order.orderUid);
     if (!info) {
       context.FlashLoanOrder.set({

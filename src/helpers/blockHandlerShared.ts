@@ -154,3 +154,45 @@ export function nextHexBucket(key: string): { _gte: string; _lt: string } {
   const hi = n === 15 ? "0y" : "0x" + (n + 1).toString(16);
   return { _gte: lo, _lt: hi };
 }
+
+/**
+ * Wall-clock pacing for realtime pollers.
+ *
+ * Envio runs a batch's block handlers one after another and commits every
+ * chain only when the batch ends. A poller that costs more than its block
+ * cadence therefore holds back all chains: Base fires every 30 blocks (~6s
+ * at 200ms blocks), and an orderbook-bound firing can take 5s or more. After
+ * a pause it also replays one firing per missed interval. Pollers read
+ * current state, so a skipped firing loses nothing. Each one runs only once
+ * POLLER_LOOP_SHARE_INVERSE times its last duration has passed since that
+ * run ended on the same chain, which caps it at about a quarter of the loop.
+ * Cheap firings (milliseconds) are never skipped.
+ *
+ * The preload pass is skipped too: these handlers' effects are paced HTTP
+ * and RPC calls, and preload runs every firing in the batch at once, which
+ * would spend that budget on firings the gate then skips.
+ */
+const POLLER_LOOP_SHARE_INVERSE = 4;
+const pollerRuns = new Map<string, { endedAt: number; tookMs: number }>();
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PollerArgs = { block: { number: number }; context: any };
+
+export function paced(
+  name: string,
+  handler: (args: PollerArgs) => Promise<void>,
+): (args: PollerArgs) => Promise<void> {
+  return async (args) => {
+    if (args.context.isPreload) return;
+    const key = `${name}:${args.context.chain.id}`;
+    const last = pollerRuns.get(key);
+    const startedAt = Date.now();
+    if (last && startedAt - last.endedAt < (POLLER_LOOP_SHARE_INVERSE - 1) * last.tookMs) return;
+    try {
+      await handler(args);
+    } finally {
+      const endedAt = Date.now();
+      pollerRuns.set(key, { endedAt, tookMs: endedAt - startedAt });
+    }
+  };
+}

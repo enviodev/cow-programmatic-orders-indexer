@@ -296,6 +296,18 @@ export async function upsertDiscreteOrders(
 }
 
 /**
+ * A by-UID lookup's answers, plus the requested UIDs nobody answered: their
+ * request was refused by the pacer, failed or timed out. A UID's absence from
+ * the map says it isn't on the API only when it is not in `unanswered`, so
+ * callers must leave unanswered UIDs for a later block rather than finalize them.
+ */
+export type UidLookup<T> = Map<string, T> & { unanswered: Set<string> };
+
+function uidLookup<T>(): UidLookup<T> {
+  return Object.assign(new Map<string, T>(), { unanswered: new Set<string>() });
+}
+
+/**
  * Fetch order statuses by UIDs from the API, using the per-UID cache.
  * Returns a Map of uid -> OrderStatusInfo. Executed amounts are null for
  * cached results (the amounts are already stored in DiscreteOrder from
@@ -306,13 +318,16 @@ export async function fetchOrderStatusByUids(
   context: any,
   uids: string[],
   handler = "unspecified",
-): Promise<Map<string, OrderStatusInfo>> {
-  const result = new Map<string, OrderStatusInfo>();
+): Promise<UidLookup<OrderStatusInfo>> {
+  const result = uidLookup<OrderStatusInfo>();
   if (uids.length === 0) return result;
 
   const chainId = context.chain.id;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
-  if (!apiBaseUrl) return result;
+  if (!apiBaseUrl) {
+    for (const uid of uids) result.unanswered.add(uid);
+    return result;
+  }
 
   // Check cache first, through the trust rule (trust.ts): only rows provably
   // beyond the chain's reorg window are served as final. Soft rows (recently
@@ -351,18 +366,19 @@ export async function fetchOrderStatusByUids(
   // per-request timeout. Terminal results are memoized in OrderUidCache below.
   if (toFetch.length > 0) {
     let fetched: OrderbookOrder[];
+    let unanswered: string[];
     try {
-      fetched = await withTimeout(
+      ({ orders: fetched, unanswered } = await withTimeout(
         fetchOrdersByUids(context, toFetch, handler),
         ORDERBOOK_BATCH_TIMEOUT_MS,
         "ob:statusByUids",
-      );
+      ));
     } catch (err) {
       if (err instanceof TimeoutError) {
         log("warn", "ob:statusByUidsTimeout", { chainId, handler, toFetch: toFetch.length, after: ORDERBOOK_BATCH_TIMEOUT_MS });
-        // Cache-only map — callers treat missing UIDs as "not on API yet".
-        // Stale-but-known entries still answer from cache.
+        // Stale-but-known entries still answer from cache; the rest are unanswered.
         for (const [uid, info] of staleFallbacks) result.set(uid, info);
+        for (const uid of toFetch) if (!result.has(uid)) result.unanswered.add(uid);
         return result;
       }
       throw err;
@@ -416,6 +432,7 @@ export async function fetchOrderStatusByUids(
     for (const [uid, info] of staleFallbacks) {
       if (!result.has(uid)) result.set(uid, info);
     }
+    for (const uid of unanswered) if (!result.has(uid)) result.unanswered.add(uid);
   }
 
   return result;
@@ -457,13 +474,16 @@ export async function fetchFlashLoanEnrichmentByUids(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   context: any,
   uids: string[],
-): Promise<Map<string, FlashLoanEnrichment>> {
-  const result = new Map<string, FlashLoanEnrichment>();
+): Promise<UidLookup<FlashLoanEnrichment>> {
+  const result = uidLookup<FlashLoanEnrichment>();
   if (uids.length === 0) return result;
 
   const chainId = context.chain.id;
   const apiBaseUrl = ORDERBOOK_API_URLS[chainId];
-  if (!apiBaseUrl) return result;
+  if (!apiBaseUrl) {
+    for (const uid of uids) result.unanswered.add(uid);
+    return result;
+  }
 
   // Cache first.
   const cached = await getCachedFlashLoanEnrichment(context, uids);
@@ -477,15 +497,18 @@ export async function fetchFlashLoanEnrichmentByUids(
 
   let fetched: OrderbookOrder[];
   try {
-    fetched = await withTimeout(
+    let unanswered: string[];
+    ({ orders: fetched, unanswered } = await withTimeout(
       fetchOrdersByUids(context, toFetch, "FlashLoanEnrichment"),
       ORDERBOOK_BATCH_TIMEOUT_MS,
       "ob:flashLoanByUids",
-    );
+    ));
+    for (const uid of unanswered) result.unanswered.add(uid);
   } catch (err) {
     if (err instanceof TimeoutError) {
       log("warn", "ob:flashLoanByUidsTimeout", { chainId, toFetch: toFetch.length, after: ORDERBOOK_BATCH_TIMEOUT_MS });
-      return result; // cache-only — caller treats missing UIDs as "not on API yet"
+      for (const uid of toFetch) result.unanswered.add(uid);
+      return result; // cache hits only
     }
     throw err;
   }

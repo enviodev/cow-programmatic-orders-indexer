@@ -131,7 +131,7 @@ export async function reconcileOpenCachedRows(
     .map((r) => r.orderUid);
   if (staleUids.length === 0) return rows;
 
-  const refreshed = await fetchOrdersByUids(context, staleUids, "OwnerBackfill");
+  const { orders: refreshed } = await fetchOrdersByUids(context, staleUids, "OwnerBackfill");
   if (refreshed.length === 0) return rows;
   const byUid = new Map(refreshed.map((o) => [o.uid, o]));
 

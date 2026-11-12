@@ -4,9 +4,11 @@
  * Capped per block, oldest-first. Ported from the upstream ponder indexer's
  * flashLoanOrderEnricher.ts.
  *
- * FlashLoanOrderBackfiller — fires once at go-live (upstream
- * startBlock=endBlock="latest"), bulk-draining the historical backlog the
- * settlement handler recorded during backfill, in bounded sequential slices.
+ * FlashLoanOrderBackfiller — drains, from go-live, the historical backlog the
+ * settlement handler recorded during backfill. Upstream does it in one firing
+ * (startBlock=endBlock="latest") inside a per-chain process; here a firing
+ * holds the batch commit for every chain, so it takes one slice per firing
+ * until the backlog fits in one.
  */
 
 import { indexer } from "envio";
@@ -15,12 +17,12 @@ import {
   FLASH_LOAN_BACKFILL_SLICE_SIZE,
 } from "../constants.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, paced, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { selectPendingFlashLoanOrders, enrichFlashLoanOrders } from "../helpers/flashLoanShared.js";
 
-// One-shot backfill guard, per chain per process (upstream achieves this with
+// Chains whose backlog is drained, per process (upstream achieves this with
 // startBlock=endBlock="latest" so the handler fires exactly once per deploy).
-const backfillRan = new Set<number>();
+const backfillDone = new Set<number>();
 
 if (!isTest) {
   indexer.onBlock(
@@ -28,31 +30,19 @@ if (!isTest) {
       name: "FlashLoanOrderBackfiller",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("FlashLoanOrderBackfiller", async ({ block, context }) => {
       if (!context.chain.isRealtime) return;
       const chainId = context.chain.id;
-      if (backfillRan.has(chainId)) return;
-      backfillRan.add(chainId);
+      if (backfillDone.has(chainId)) return;
 
-      const pending = await selectPendingFlashLoanOrders(context, chainId);
-      if (!context.isPreload) {
-        log("info", "FlashLoanOrderBackfiller:START", { block: String(block.number), chainId, pending: pending.length });
-      }
+      const pending = await selectPendingFlashLoanOrders(context);
+      if (pending.length <= FLASH_LOAN_BACKFILL_SLICE_SIZE) backfillDone.add(chainId);
       if (pending.length === 0) return;
 
-      let enriched = 0;
-      let missing = 0;
-      for (let i = 0; i < pending.length; i += FLASH_LOAN_BACKFILL_SLICE_SIZE) {
-        const slice = pending.slice(i, i + FLASH_LOAN_BACKFILL_SLICE_SIZE);
-        const r = await enrichFlashLoanOrders(context, (await blockTimestamp(context, block)), slice);
-        enriched += r.enriched;
-        missing += r.missing;
-      }
-
-      if (!context.isPreload) {
-        log("info", "FlashLoanOrderBackfiller:DONE", { block: String(block.number), chainId, pending: pending.length, enriched, missing });
-      }
-    },
+      const slice = pending.slice(0, FLASH_LOAN_BACKFILL_SLICE_SIZE);
+      const { enriched, missing } = await enrichFlashLoanOrders(context, await blockTimestamp(context, block), slice);
+      log("info", "FlashLoanOrderBackfiller:SLICE", { block: String(block.number), chainId, pending: pending.length, enriched, missing });
+    }),
   );
 
   indexer.onBlock(
@@ -60,7 +50,7 @@ if (!isTest) {
       name: "FlashLoanOrderEnricher",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("FlashLoanOrderEnricher", async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
@@ -81,6 +71,6 @@ if (!isTest) {
       if (!context.isPreload) {
         log("info", "FlashLoanOrderEnricher:DONE", { block: String(block.number), chainId, pending: pending.length, enriched, missing });
       }
-    },
+    }),
   );
 }

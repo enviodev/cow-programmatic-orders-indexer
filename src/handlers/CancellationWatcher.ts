@@ -18,7 +18,7 @@ import {
 } from "../constants.js";
 import { checkOrdersActive } from "../effects/rpc.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, isTest, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, isTest, paced, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 
 if (!isTest) {
   indexer.onBlock(
@@ -26,7 +26,7 @@ if (!isTest) {
       name: "CancellationWatcher",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("CancellationWatcher", async ({ block, context }) => {
       if (!context.chain.isRealtime) return; // startBlock "latest" upstream
 
       const chainId = context.chain.id;
@@ -112,6 +112,6 @@ if (!isTest) {
       if (!context.isPreload) {
         log("info", "CancellationWatcher:DONE", { block: String(currentBlock), chainId, due: dueGenerators.length, cancelled: cancelledCount, stillActive: stillActiveCount, errors: errorCount });
       }
-    },
+    }),
   );
 }

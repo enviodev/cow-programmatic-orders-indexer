@@ -11,12 +11,18 @@
  */
 
 import { indexer } from "envio";
-import { decodedOrderFromGenerator, precomputeAndDiscover } from "../helpers/uidPrecompute.js";
-import { blockHandlerInterval, blockTimestamp, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
+import { decodedOrderFromGenerator, precomputeAndDiscover, precomputeOrderUids } from "../helpers/uidPrecompute.js";
+import { fetchOrderStatusByUids } from "../helpers/orderbook/client.js";
+import { blockHandlerInterval, blockTimestamp, isTest, paced, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { log } from "../helpers/logger.js";
 import type { Hex } from "viem";
 
 const DEFAULT_MAX_PRECOMPUTES_PER_BLOCK = 25;
+// Status lookups per firing, fetched in one batch (100 UIDs per request).
+// Block handlers hold the batch commit for every chain, so a firing asks for
+// about what the orderbook pacer can serve within its wait limit; the first
+// generator is always taken, however many parts it has.
+const MAX_UIDS_PER_FIRING = 500;
 
 if (!isTest) {
   indexer.onBlock(
@@ -24,7 +30,7 @@ if (!isTest) {
       name: "PrecomputeBackfiller",
       where: ({ chain }) => pollerBlockFilter(chain.id),
     },
-    async ({ block, context }) => {
+    paced("PrecomputeBackfiller", async ({ block, context }) => {
       if (!context.chain.isRealtime) return;
 
       const chainId = context.chain.id;
@@ -47,44 +53,48 @@ if (!isTest) {
         .sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
         .slice(0, cap);
 
-      let done = 0;
+      // Upstream precomputes inline at creation, so its rows carry the
+      // creation block's timestamp as creationDate. The deferred drain must
+      // do the same — the generator id embeds its creation block, and the
+      // cached getBlockTimestamp effect resolves the header. The same
+      // timestamp resolves TWAP t0 = 0 when the staticInput is re-decoded.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prepared = await Promise.all(batch.map(async (gen: any) => {
+        const creationTs = await blockTimestamp(context, { number: Number(gen.id.split("_")[0]) });
+        const decodedOrder = decodedOrderFromGenerator(gen, creationTs);
+        const uids = (precomputeOrderUids(chainId, gen.owner as Hex, decodedOrder, creationTs) ?? [])
+          .map((o) => o.orderUid);
+        return { gen, creationTs, decodedOrder, uids };
+      }));
 
-      // Wall-clock budget per firing: under orderbook 429 penalties a single
-      // status fetch can legitimately take 30-60s, and an unbounded loop over
-      // the batch holds the whole processing batch (and every DB flush) open
-      // for tens of minutes. Stop early and leave the rest pending — the next
-      // firing resumes.
-      const FIRING_BUDGET_MS = 45_000;
-      const start = Date.now();
+      let uidCount = 0;
+      const selected = prepared.filter((p, i) => {
+        if (i > 0 && uidCount + p.uids.length > MAX_UIDS_PER_FIRING) return false;
+        uidCount += p.uids.length;
+        return true;
+      });
+      const statuses = await fetchOrderStatusByUids(context, selected.flatMap((p) => p.uids), "PrecomputeBackfiller");
 
-      for (const gen of batch) {
-        if (Date.now() - start > FIRING_BUDGET_MS) break;
-        // Upstream precomputes inline at creation, so its rows carry the
-        // creation block's timestamp as creationDate. The deferred drain must
-        // do the same — the generator id embeds its creation block, and the
-        // cached getBlockTimestamp effect resolves the header. The same
-        // timestamp resolves TWAP t0 = 0 when the staticInput is re-decoded.
-        const creationBlock = Number(gen.id.split("_")[0]);
-        const creationTs = await blockTimestamp(context, { number: creationBlock });
+      for (const { gen, creationTs, decodedOrder } of selected) {
         await precomputeAndDiscover(
           context,
           gen.id,
           gen.owner as Hex,
-          decodedOrderFromGenerator(gen, creationTs),
+          decodedOrder,
           creationTs,
           BigInt(block.number),
+          statuses,
         );
         // Re-read: precomputeAndDiscover may have updated status/allCandidatesKnown.
         const fresh = await context.ConditionalOrderGenerator.get(gen.id);
         if (fresh) {
           context.ConditionalOrderGenerator.set({ ...fresh, precomputePending: false });
         }
-        done++;
       }
 
       if (!context.isPreload) {
-        log("info", "PrecomputeBackfiller:DONE", { block: String(block.number), chainId, pending: pending.length, done, budgetMs: Date.now() - start });
+        log("info", "PrecomputeBackfiller:DONE", { block: String(block.number), chainId, pending: pending.length, done: selected.length, uids: uidCount });
       }
-    },
+    }),
   );
 }

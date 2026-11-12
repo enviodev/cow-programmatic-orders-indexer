@@ -22,7 +22,7 @@ import {
 import { pollTradeableOrders, type PollOrderResult } from "../effects/rpc.js";
 import { computeOrderUid, KIND_SELL, type GPv2OrderData } from "../helpers/orderUid.js";
 import { log } from "../helpers/logger.js";
-import { blockHandlerInterval, blockTimestamp, isTest, pollerBlockFilter, resolveCap, targetInterval } from "../helpers/blockHandlerShared.js";
+import { blockHandlerInterval, blockTimestamp, isTest, paced, pollerBlockFilter, resolveCap, targetInterval } from "../helpers/blockHandlerShared.js";
 import { type OrderType } from "../utils/order-types.js";
 import type { Hex } from "viem";
 
@@ -68,7 +68,7 @@ if (!isTest) {
       // skipped use this discovery path.
       where: ({ chain }) => pollerBlockFilter(chain.id, targetInterval(chain.id, 60)),
     },
-    async ({ block, context }) => {
+    paced("OrderDiscoveryPoller", async ({ block, context }) => {
       // startBlock "latest" upstream — only poll once caught up to the tip.
       if (!context.chain.isRealtime) return;
 
@@ -278,6 +278,6 @@ if (!isTest) {
       if (!context.isPreload) {
         log("info", "OrderDiscoveryPoller:DONE", { block: String(currentBlock), chainId, due: dueOrders.length, success: successCount, never: neverCount, backedOff: backedOffCount, capped });
       }
-    },
+    }),
   );
 }

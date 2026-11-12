@@ -47,7 +47,8 @@ pnpm test             # unit + integration tests (integration needs network)
   - Per-firing caps: `MAX_GENERATORS_PER_BLOCK_<chainId>`, `MAX_DISCRETE_ORDERS_PER_BLOCK_<chainId>`,
     `MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>`, `MAX_FLASH_LOAN_ORDERS_PER_BLOCK_<chainId>`,
     `MAX_PRECOMPUTES_PER_BLOCK_<chainId>`, `MAX_SCAN_RETRIES_PER_BLOCK_<chainId>`.
-  - Orderbook: `ORDERBOOK_CONCURRENCY`; `ORDERBOOK_API_URL_TEMPLATE`, e.g.
+  - Orderbook: `ORDERBOOK_CONCURRENCY`; `ORDERBOOK_REQUESTS_PER_MINUTE` (default 80
+    for `by_uids`, half that for `account`); `ORDERBOOK_API_URL_TEMPLATE`, e.g.
     `http://{network}-api-prod.services.svc.cluster.local` (`{network}` is the chain's API
     path with dashes, default `https://api.cow.fi/<path>`).
   - Pollers: `POLLER_FLOOR_FROM_HEAD=0` (fire through all history; default anchors
@@ -57,10 +58,13 @@ pnpm test             # unit + integration tests (integration needs network)
 ## CoW Orderbook API budget
 
 api.cow.fi enforces ~100 requests/minute per IP per read endpoint (documented),
-with a Cloudflare layer that escalates sustained abuse to 30s+ penalties. The
-effects encode this: `by_uids` 80/min (×100 UIDs/request), `account` 40/min,
-plus a shared concurrency semaphore and full `Retry-After` honoring. For
-elevated limits CoW suggests contacting bd@cow.fi.
+and answers bursts with 429 and a 30s Retry-After. One request pacer per endpoint,
+shared by all chains, keeps under it: `by_uids` 80 requests/min (100 UIDs each),
+`account` 40/min, plus a concurrency semaphore. During a 429 penalty the pacer
+refuses requests instead of sleeping, and so does any request that would wait more
+than 4s for a slot: block handlers await these calls, and envio commits no chain's
+batch until they return. Refused UIDs are retried on a later block. For elevated
+limits CoW suggests contacting bd@cow.fi.
 
 ## Deviations from upstream (by necessity)
 
@@ -86,7 +90,21 @@ elevated limits CoW suggests contacting bd@cow.fi.
   `programmatic_order` with part counts — fb75af6/9057fff) are API-layer reads; the
   GraphQL API serves both tables with relationship queries instead.
 - Upstream's isolated per-chain sync (682d0ac — one ponder instance per chain, plus a
-  patched ponder build) is unnecessary here: envio chains already sync independently.
+  patched ponder build) is unnecessary here: envio fetches each chain independently.
+- One envio process serves every chain, and a batch's block handlers run one after
+  another before any chain commits. A slow poller would hold back every chain, so:
+  - Pollers are paced on wall-clock time (`paced` in `blockHandlerShared.ts`): one waits
+    until 3× its last run's duration has passed, skipping firings meanwhile. Pollers
+    read current state, so a skipped firing loses nothing. They also skip envio's
+    preload pass.
+  - FlashLoanOrderBackfiller drains the historical backlog one 500-order slice per
+    firing instead of all at once.
+  - PrecomputeBackfiller fetches statuses for all of a firing's generators in one
+    batched lookup (≤500 UIDs).
+- A by-UID lookup reports the UIDs it could not ask about (refused, failed or timed out).
+  CandidateConfirmer's cancelled-parent cascade and expiry sweep leave those for a
+  later block instead of recording them as cancelled or expired, and flash-loan
+  enrichment doesn't count them as a failed attempt. Upstream finalizes them.
 
 ## Pre-requisites
 
