@@ -165,13 +165,22 @@ for (const chainId of CHAINS) {
   let orderMismatch = [];
   let ordersCompared = 0;
   if (precomputed.length > 0) {
+    // Fetch only the compared generators' orders, 100 generators at a time:
+    // whole-chain order tables run to hundreds of thousands of rows.
     const ORDER_FIELDS = "orderUid sellAmount buyAmount feeAmount validTo";
-    const [tDisc, tCand, oDisc, oCand] = await Promise.all([
-      theirsAll("discreteOrder", { chainId }, `${ORDER_FIELDS} conditionalOrderGeneratorId status`),
-      theirsAll("candidateDiscreteOrder", { chainId }, `${ORDER_FIELDS} conditionalOrderGeneratorId`),
-      oursAll("DiscreteOrder", { chainId: { _eq: chainId } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id status`),
-      oursAll("CandidateDiscreteOrder", { chainId: { _eq: chainId } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id`),
-    ]);
+    const tDisc = [], tCand = [], oDisc = [], oCand = [];
+    for (let i = 0; i < precomputed.length; i += 100) {
+      const chunk = precomputed.slice(i, i + 100);
+      const tIds = chunk.map(([t]) => t.eventId);
+      const oIds = chunk.map(([, o]) => o.id);
+      const [td, tc, od, oc] = await Promise.all([
+        theirsAll("discreteOrder", { chainId, conditionalOrderGeneratorId_in: tIds }, `${ORDER_FIELDS} conditionalOrderGeneratorId status`),
+        theirsAll("candidateDiscreteOrder", { chainId, conditionalOrderGeneratorId_in: tIds }, `${ORDER_FIELDS} conditionalOrderGeneratorId`),
+        oursAll("DiscreteOrder", { chainId: { _eq: chainId }, conditionalOrderGenerator_id: { _in: oIds } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id status`),
+        oursAll("CandidateDiscreteOrder", { chainId: { _eq: chainId }, conditionalOrderGenerator_id: { _in: oIds } }, `id ${ORDER_FIELDS} conditionalOrderGenerator_id`),
+      ]);
+      tDisc.push(...td); tCand.push(...tc); oDisc.push(...od); oCand.push(...oc);
+    }
     const group = (rows, idField) => {
       const m = new Map();
       for (const r of rows) {
