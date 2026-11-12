@@ -11,6 +11,7 @@
 import { ACTIVE_CHAINS } from "../chains/index.js";
 import { hypersyncHeight } from "./hypersync.js";
 import { log } from "./logger.js";
+import { env } from "./env.js";
 
 /** Per-chain block-handler interval: blockTime < 8 ? 10 : 4 (upstream rule). */
 export function blockHandlerInterval(chainId: number): number {
@@ -29,7 +30,7 @@ export function targetInterval(chainId: number, targetSeconds: number): number {
 
 /** Resolve an integer cap from an env var with a default. */
 export function resolveCap(envVar: string, fallback: number): number {
-  const raw = Number(process.env[envVar]);
+  const raw = Number(env(envVar));
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
 
@@ -62,10 +63,6 @@ export const isTest = typeof process !== "undefined" && !!process.env.VITEST;
  * Falls back to 0 (fire everywhere) if the height lookup fails.
  */
 const ACTIVATION_MARGIN_BLOCKS = 1_000;
-
-function env(name: string): string | undefined {
-  return process.env[`ENVIO_${name}`] ?? process.env[name];
-}
 
 async function resolveActivationFloors(): Promise<Record<number, number>> {
   const floors: Record<number, number> = {};

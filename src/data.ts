@@ -5,6 +5,7 @@
 
 import { ALL_HANDLER_ADDRESSES } from "./utils/order-types.js";
 import { ACTIVE_CHAINS, ALL_DEFINED_CHAINS } from "./chains/index.js";
+import { env } from "./helpers/env.js";
 
 // CREATE2-deployed contracts share the same address across chains
 export const GPV2_SETTLEMENT_ADDRESS =
@@ -44,10 +45,23 @@ export const COMPOSABLE_COW_ADDRESS_BY_CHAIN_ID: Partial<Record<number, `0x${str
 export const COMPOSABLE_COW_HANDLER_ADDRESSES = new Set(ALL_HANDLER_ADDRESSES);
 
 /**
- * CoW Protocol Orderbook API base URLs per chain ID.
+ * CoW Protocol Orderbook API base URLs per chain ID, including inactive chains
+ * used for API-only lookups.
+ *
+ * ORDERBOOK_API_URL_TEMPLATE (ENVIO_-prefixed on hosted) overrides the default
+ * https://api.cow.fi/<path>; `{network}` becomes the chain's orderbook path
+ * with underscores as dashes, e.g.
+ *   http://{network}-api-prod.services.svc.cluster.local
+ * Trailing slashes are trimmed. (Upstream 9e54ca7.)
  */
 export const ORDERBOOK_API_URLS: Record<number, string> = Object.fromEntries(
-  ALL_DEFINED_CHAINS.map((c) => [c.chainId, `https://api.cow.fi/${c.orderbookApiPath}`]),
+  ALL_DEFINED_CHAINS.map((c) => [
+    c.chainId,
+    (
+      env("ORDERBOOK_API_URL_TEMPLATE")?.replace("{network}", c.orderbookApiPath.replace(/_/g, "-")) ||
+      `https://api.cow.fi/${c.orderbookApiPath}`
+    ).replace(/\/+$/, ""),
+  ]),
 );
 
 /**

@@ -19,6 +19,7 @@ import { AAVE_V3_ROUTER_ADDRESSES } from "../data.js";
 import { scanAaveSettlement, type AaveSettlementCandidate } from "../effects/rpc.js";
 import { persistAaveCandidates } from "../helpers/aaveSettlement.js";
 import { log } from "../helpers/logger.js";
+import { env } from "../helpers/env.js";
 
 indexer.onEvent(
   {
@@ -31,7 +32,7 @@ indexer.onEvent(
     },
   },
   async ({ event, context }) => {
-    if (process.env.DISABLE_SETTLEMENT_FACTORY_CHECK === "true") return;
+    if (env("DISABLE_SETTLEMENT_FACTORY_CHECK") === "true") return;
 
     const chainId = event.chainId;
     const txHash = event.transaction.hash;

@@ -42,11 +42,17 @@ pnpm test             # unit + integration tests (integration needs network)
 - `ENVIO_RPC_URL_1`, `ENVIO_RPC_URL_100` — RPC URLs for view calls: order polling,
   cancellation sweeps, flash-loan adapter detection, block timestamps. Without them the
   pollers no-op gracefully (event indexing still works via HyperSync).
-- Optional caps: `MAX_GENERATORS_PER_BLOCK_<chainId>`, `MAX_DISCRETE_ORDERS_PER_BLOCK_<chainId>`,
-  `MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>`, `MAX_FLASH_LOAN_ORDERS_PER_BLOCK_<chainId>`,
-  `MAX_PRECOMPUTES_PER_BLOCK_<chainId>`, `MAX_SCAN_RETRIES_PER_BLOCK_<chainId>`,
-  `ORDERBOOK_CONCURRENCY`, `POLLER_FLOOR_FROM_HEAD=1` (skip historical poller firings),
-  `POLLER_ACTIVATION_BLOCK_<chainId>`, `DISABLE_SETTLEMENT_FACTORY_CHECK`.
+- Optional knobs. Each is read as `ENVIO_<NAME>` first (hosted envio-cloud only accepts
+  ENVIO_-prefixed keys), then as the bare `<NAME>`:
+  - Per-firing caps: `MAX_GENERATORS_PER_BLOCK_<chainId>`, `MAX_DISCRETE_ORDERS_PER_BLOCK_<chainId>`,
+    `MAX_OWNERS_BACKFILL_PER_BLOCK_<chainId>`, `MAX_FLASH_LOAN_ORDERS_PER_BLOCK_<chainId>`,
+    `MAX_PRECOMPUTES_PER_BLOCK_<chainId>`, `MAX_SCAN_RETRIES_PER_BLOCK_<chainId>`.
+  - Orderbook: `ORDERBOOK_CONCURRENCY`; `ORDERBOOK_API_URL_TEMPLATE`, e.g.
+    `http://{network}-api-prod.services.svc.cluster.local` (`{network}` is the chain's API
+    path with dashes, default `https://api.cow.fi/<path>`).
+  - Pollers: `POLLER_FLOOR_FROM_HEAD=0` (fire through all history; default anchors
+    pollers near the head), `POLLER_ACTIVATION_BLOCK_<chainId>` (pin the floor).
+  - Escape hatches: `DISABLE_SETTLEMENT_FACTORY_CHECK=true`, `DISABLE_OWNER_BACKFILL=1`.
 
 ## CoW Orderbook API budget
 

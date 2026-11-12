@@ -38,6 +38,7 @@ import { TimeoutError, withTimeout } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
 import { blockHandlerInterval, isTest, nextHexBucket, pollerBlockFilter, resolveCap } from "../helpers/blockHandlerShared.js";
 import { OWNER_BACKFILL_TYPES } from "../utils/order-types.js";
+import { env } from "../helpers/env.js";
 
 // Shared drain — registered for both the historical and live block handlers below.
 async function drainOwnerBatch(
@@ -50,7 +51,7 @@ async function drainOwnerBatch(
   // Ops escape hatch: the /account drain is the heaviest consumer of the
   // orderbook's per-IP budget; disable it on hosts whose IP is rate-penalized
   // and run it elsewhere (the historyBackfilled flags keep the backlog).
-  if (process.env.DISABLE_OWNER_BACKFILL === "1") return;
+  if (env("DISABLE_OWNER_BACKFILL") === "1") return;
   const chainId = context.chain.id;
   const currentBlock = BigInt(block.number);
   const cap = resolveCap(

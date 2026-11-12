@@ -23,6 +23,7 @@ import { fetchWithTimeout, TimeoutError } from "../helpers/withTimeout.js";
 import { log } from "../helpers/logger.js";
 import { BATCH_SIZE, PAGE_LIMIT, type OrderbookOrder } from "../helpers/orderbook/types.js";
 import { decodeEip1271Signature } from "../decoders/erc1271-signature.js";
+import { env } from "../helpers/env.js";
 
 /**
  * The orderbook API refused to answer (HTTP 429 or 5xx) after bounded retries.
@@ -48,8 +49,8 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * healthy: ~24 in flight sustains full throughput at normal ~100ms latency
  * without ever stampeding it.
  */
-const MAX_ORDERBOOK_CONCURRENCY = Number(process.env.ORDERBOOK_CONCURRENCY) > 0
-  ? Number(process.env.ORDERBOOK_CONCURRENCY)
+const MAX_ORDERBOOK_CONCURRENCY = Number(env("ORDERBOOK_CONCURRENCY")) > 0
+  ? Number(env("ORDERBOOK_CONCURRENCY"))
   : 6;
 let httpSlotsFree = MAX_ORDERBOOK_CONCURRENCY;
 const httpSlotWaiters: Array<() => void> = [];
