@@ -1,6 +1,12 @@
-// Structured JSON logger for handler code — one JSON line per call.
-// Ported from the upstream ponder indexer; envio's context.log is per-handler,
-// while these helpers also run outside handler context.
+// Structured logger for handler code, ported from the upstream ponder indexer
+// (log(level, msg, fields)). These helpers also run outside a handler, where
+// envio's context.log is unavailable.
+//
+// envio >=3.15 routes console.* through its own logger: a (message, plainObject)
+// call becomes a structured line at the matching level (uinfo/uwarn/uerror),
+// tagged with the handler, chain and block, and shown on Envio Cloud. So pass
+// msg and fields as-is: pre-serialized JSON loses the structure, and warnings
+// sent to console.error are reported as errors.
 
 type LogLevel = "info" | "warn" | "error";
 
@@ -9,10 +15,5 @@ export function log(
   msg: string,
   fields: Record<string, unknown> = {},
 ): void {
-  const line = JSON.stringify({ time: Date.now(), level, msg, ...fields });
-  if (level === "warn" || level === "error") {
-    console.error(line);
-  } else {
-    console.log(line);
-  }
+  console[level](msg, { ...fields });
 }
